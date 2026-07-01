@@ -48,6 +48,21 @@ struct PRChecks {
     let checks: [CheckRow.Model]
 }
 
+/// Whether the hover quick-actions apply to a PR, derived during hydration (see
+/// `AppStore.prGates`). `alreadyApproved` hides Approve; `mergeable` is the full
+/// "GitHub would let me merge this" verdict (state + write access) that gates Merge.
+struct PRGate {
+    let alreadyApproved: Bool
+    let mergeable: Bool
+}
+
+/// One PR's hydrated state — CI checks and the action gate — produced together from the
+/// same fetch sequence so the hydration wave writes both in one pass.
+struct PRState {
+    let checks: PRChecks?
+    let gate: PRGate?
+}
+
 /// The result of loading one account's sections + inbox, gathered off the main actor and
 /// merged back on it. Value type with `Sendable` members → implicit `Sendable`.
 struct AccountLoad {

@@ -67,19 +67,86 @@ extension AppStore {
         Log.network.error("\(what, privacy: .public) [\(account.login, privacy: .public)]: \(reason, privacy: .public)")
     }
 
-    /// Fetch and map one PR's check runs, or nil if the PR has no checks or anything fails.
-    nonisolated static func fetchChecks(for item: SearchIssue, using api: GitHubAPI) async -> PRChecks? {
+    /// Hydrate one PR: fetch its detail (once), then best-effort its check runs and reviews,
+    /// and derive the action gate. Never throws — a failed detail fetch yields an empty
+    /// `PRState` so the row stays optimistic (buttons show as they did before hydration).
+    /// `canMerge` is the viewer's push access to the repo, or nil when unknown.
+    nonisolated static func fetchPRState(
+        for item: SearchIssue,
+        login: String,
+        canMerge: Bool?,
+        using api: GitHubAPI
+    ) async
+    -> PRState {
+        let repo = item.repositorySlug
+        guard let detail = try? await api.pullRequest(repo: repo, number: item.number) else {
+            Log.network.debug("pr detail skip #\(item.number, privacy: .public)")
+            return PRState(checks: nil, gate: nil)
+        }
+        let checks = await fetchChecks(repo: repo, detail: detail, using: api)
+        // `alreadyApproved` is irrelevant for the viewer's own PRs (Approve is hidden
+        // synchronously in the row anyway), so skip the reviews call for them — it saves a
+        // request per own-PR per poll, which matters against GitHub's hourly rate limit.
+        let isOwnPR = item.user?.login.lowercased() == login.lowercased()
+        let reviews: [PullRequestReview] = if isOwnPR {
+            []
+        } else {
+            await (try? api.reviews(repo: repo, number: item.number)) ?? []
+        }
+        let gate = deriveGate(detail: detail, reviews: reviews, login: login, canMerge: canMerge)
+        return PRState(checks: checks, gate: gate)
+    }
+
+    /// Map a PR's check runs to a `PRChecks`, or nil if it has no checks or the fetch fails.
+    private nonisolated static func fetchChecks(
+        repo: String,
+        detail: PullRequestDetail,
+        using api: GitHubAPI
+    ) async
+    -> PRChecks? {
         do {
-            let repo = item.repositorySlug
-            let detail = try await api.pullRequest(repo: repo, number: item.number)
             let runs = try await api.checkRuns(repo: repo, ref: detail.head.sha)
             guard let status = runs.ciRollup else { return nil }
             let models = runs.map { $0.checkRowModel(repo: repo, branch: detail.head.ref) }
             return PRChecks(status: status, checks: models)
         } catch {
             Log.network
-                .debug("ci skip #\(item.number, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                .debug("ci skip #\(detail.number, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    /// Derive the action gate from PR detail + reviews. Pure so it's unit-testable.
+    /// - `alreadyApproved`: the viewer's *latest* definitive review (approve / changes /
+    ///   dismissed — comment & pending don't count) is an approval. Relies on GitHub returning
+    ///   reviews oldest-first; the caller caps at one page (100), enough in practice.
+    /// - `mergeable`: GitHub would show a live Merge button (open, non-draft, a clean-ish
+    ///   `mergeable_state`) *and* the viewer has push access. Stays optimistic where the answer
+    ///   is genuinely unknown — `nil`/`"unknown"` mergeable_state (GitHub still computing after a
+    ///   push) or `nil` push access — so a valid Merge button never flickers away; only the
+    ///   definitively-bad states (blocked/dirty/behind/draft/closed) hide it.
+    nonisolated static func deriveGate(
+        detail: PullRequestDetail,
+        reviews: [PullRequestReview],
+        login: String,
+        canMerge: Bool?
+    )
+    -> PRGate {
+        let me = login.lowercased()
+        let mine = reviews.filter { review in
+            review.user?.login.lowercased() == me
+                && ["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].contains(review.state)
+        }
+        let alreadyApproved = mine.last?.state == "APPROVED"
+
+        let mergeableStateOK: Bool = switch detail.mergeableState {
+        case nil,
+             "unknown": true // indeterminate → optimistic
+        case let state?: ["clean", "unstable", "has_hooks"].contains(state)
+        }
+        let stateOK = detail.state == "open" && detail.draft != true && mergeableStateOK
+        let mergeable = stateOK && (canMerge ?? true)
+
+        return PRGate(alreadyApproved: alreadyApproved, mergeable: mergeable)
     }
 }

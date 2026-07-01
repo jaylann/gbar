@@ -87,6 +87,9 @@ struct PullRequestDetail: Decodable {
     let htmlURL: String
     let merged: Bool?
     let mergeable: Bool?
+    /// GitHub's composite merge verdict (`clean`/`unstable`/`blocked`/`dirty`/`behind`/…) —
+    /// richer than `mergeable`, and the signal that decides whether the Merge button shows.
+    let mergeableState: String?
     let draft: Bool?
     let user: GitHubUser?
     let createdAt: Date
@@ -101,12 +104,40 @@ struct PullRequestDetail: Decodable {
         case htmlURL = "html_url"
         case merged
         case mergeable
+        case mergeableState = "mergeable_state"
         case draft
         case user
         case createdAt = "created_at"
         case updatedAt = "updated_at"
         case head
     }
+}
+
+/// One review on a pull request (`GET /repos/{owner}/{repo}/pulls/{number}/reviews`).
+/// `state` is `APPROVED`/`CHANGES_REQUESTED`/`COMMENTED`/`DISMISSED`/`PENDING`; reviews
+/// come back in chronological order, so the last definitive one by a user wins.
+struct PullRequestReview: Decodable {
+    let user: GitHubUser?
+    let state: String
+    let submittedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case user
+        case state
+        case submittedAt = "submitted_at"
+    }
+}
+
+/// Repository detail (`GET /repos/{owner}/{repo}`) — we only need the viewer's
+/// `permissions` to decide whether merging is even possible.
+struct RepositoryInfo: Decodable {
+    struct Permissions: Decodable {
+        let push: Bool
+        let maintain: Bool?
+        let admin: Bool
+    }
+
+    let permissions: Permissions?
 }
 
 /// One check run for a commit (`GET /repos/{owner}/{repo}/commits/{ref}/check-runs`).

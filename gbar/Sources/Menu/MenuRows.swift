@@ -31,6 +31,23 @@ struct PRRowItem: View {
         "\(issue.repositorySlug) #\(issue.number)"
     }
 
+    /// Own PRs can't be approved (GitHub 422s) — detectable instantly without hydration.
+    private var isOwnPR: Bool {
+        issue.user?.login.lowercased() == item.account.login.lowercased()
+    }
+
+    /// Show Approve unless it's the viewer's own PR or they've already approved it. Until the
+    /// gate hydrates, only the (synchronous) own-PR check applies — stay optimistic otherwise.
+    private var showApprove: Bool {
+        !isOwnPR && !(store.gate(for: item)?.alreadyApproved ?? false)
+    }
+
+    /// Show Merge unless the gate says the PR isn't actually mergeable. Optimistic (shown)
+    /// until hydration resolves the gate.
+    private var showMerge: Bool {
+        store.gate(for: item)?.mergeable ?? true
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
@@ -42,6 +59,8 @@ struct PRRowItem: View {
                     PRQuickActions(
                         issue: issue,
                         isSubmitting: isSubmitting,
+                        showApprove: showApprove,
+                        showMerge: showMerge,
                         onApprove: { submit { await store.approve(item) } },
                         onMerge: { isConfirmingMerge = true }
                     )
@@ -52,9 +71,16 @@ struct PRRowItem: View {
                         PRRow(issue: issue, ci: checks?.status)
                     }
                     .buttonStyle(.plain)
-                    // Keep the hover-gated Approve/Merge reachable via VoiceOver's actions rotor.
-                    .accessibilityAction(named: "Approve \(prLabel)") { submit { await store.approve(item) } }
-                    .accessibilityAction(named: "Merge \(prLabel)") { isConfirmingMerge = true }
+                    // Keep the hover-gated Approve/Merge reachable via VoiceOver's actions rotor —
+                    // but only the ones actually applicable to this PR.
+                    .accessibilityActions {
+                        if showApprove {
+                            Button("Approve \(prLabel)") { submit { await store.approve(item) } }
+                        }
+                        if showMerge {
+                            Button("Merge \(prLabel)") { isConfirmingMerge = true }
+                        }
+                    }
                 })
             }
             if expanded {
@@ -122,6 +148,10 @@ struct PRRowItem: View {
 private struct PRQuickActions: View {
     let issue: SearchIssue
     let isSubmitting: Bool
+    /// Whether each action applies to this PR — a button is omitted entirely when false, so
+    /// the viewer only ever sees actions that would actually succeed.
+    let showApprove: Bool
+    let showMerge: Bool
     var onApprove: () -> Void
     var onMerge: () -> Void
 
@@ -131,19 +161,23 @@ private struct PRQuickActions: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Button { onApprove() } label: {
-                Image(systemName: "checkmark")
+            if showApprove {
+                Button { onApprove() } label: {
+                    Image(systemName: "checkmark")
+                }
+                .buttonStyle(GBButtonStyle(variant: .secondary))
+                .gbTooltip("Approve")
+                .accessibilityLabel("Approve \(prLabel)")
             }
-            .buttonStyle(GBButtonStyle(variant: .secondary))
-            .gbTooltip("Approve")
-            .accessibilityLabel("Approve \(prLabel)")
 
-            Button { onMerge() } label: {
-                Image(systemName: "arrow.triangle.merge")
+            if showMerge {
+                Button { onMerge() } label: {
+                    Image(systemName: "arrow.triangle.merge")
+                }
+                .buttonStyle(GBButtonStyle(variant: .primary))
+                .gbTooltip("Merge")
+                .accessibilityLabel("Merge \(prLabel)")
             }
-            .buttonStyle(GBButtonStyle(variant: .primary))
-            .gbTooltip("Merge")
-            .accessibilityLabel("Merge \(prLabel)")
         }
         .disabled(isSubmitting)
     }
