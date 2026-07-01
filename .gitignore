@@ -39,6 +39,10 @@ Tuist/Config/Release.xcconfig
 .claude/settings.local.json
 .claude/worktrees/
 
+# Local-only planning / notes (never published)
+*.local.md
+.notes/
+
 # Release artifacts
 dist/
 
