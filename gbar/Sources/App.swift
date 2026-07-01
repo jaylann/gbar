@@ -1,25 +1,16 @@
 import SwiftUI
 
-/// gbar — a GitHub companion in the macOS menu bar. `LSUIElement` (set in Info.plist)
-/// makes this an agent app: menu-bar only, no dock icon, no main window.
+/// gbar — a GitHub companion in the macOS menu bar. `LSUIElement` (set in Info.plist) makes this
+/// an agent app: menu-bar only, no dock icon, no main window. The status item and its popover are
+/// managed imperatively by `StatusItemController` (see there for why not `MenuBarExtra`); the only
+/// SwiftUI scene left is `Settings`.
 @main
 struct GbarApp: App {
-    @State private var store = AppStore()
+    @NSApplicationDelegateAdaptor(StatusItemController.self) private var appDelegate
 
     var body: some Scene {
-        MenuBarExtra {
-            MenuContentView(store: store)
-        } label: {
-            if store.badgeCount > 0 {
-                Label("\(store.badgeCount)", systemImage: "chevron.left.forwardslash.chevron.right")
-            } else {
-                Image(systemName: "chevron.left.forwardslash.chevron.right")
-            }
-        }
-        .menuBarExtraStyle(.window)
-
         Settings {
-            SettingsView(store: store)
+            SettingsView(store: appDelegate.store)
         }
     }
 }
