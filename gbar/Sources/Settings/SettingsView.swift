@@ -19,6 +19,13 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 420)
+        // A window spawned from an `LSUIElement` agent app becomes key (Tab works) but
+        // not *main*, so mouse clicks don't move first responder into a text field.
+        // Grab the real window and force it key+main so click-to-focus works.
+        .background(WindowActivator())
+        // Drop back to an agent app (no Dock icon) once Settings closes; it was
+        // promoted to `.regular` on open so its text fields could take keyboard focus.
+        .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
 
     private var accountSection: some View {
@@ -80,4 +87,22 @@ struct SettingsView: View {
             status = "Sign-in failed: \(error.localizedDescription)"
         }
     }
+}
+
+/// Captures the hosting `NSWindow` once the view is in the hierarchy and forces it
+/// key+main, plus activates the app. Needed because a window opened from an
+/// `LSUIElement` agent app doesn't reliably become main, which blocks mouse
+/// click-to-focus on text fields.
+private struct WindowActivator: NSViewRepresentable {
+    func makeNSView(context _: Context) -> NSView {
+        let view = NSView()
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            view.window?.makeKeyAndOrderFront(nil)
+        }
+        return view
+    }
+
+    func updateNSView(_: NSView, context _: Context) {}
 }

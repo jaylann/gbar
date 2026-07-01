@@ -38,6 +38,9 @@ struct PRRow: View {
                 if let ci {
                     CIStatusIndicator(status: ci)
                 }
+                if let user = issue.user {
+                    Avatar(login: user.login, url: user.avatarURL.flatMap(URL.init))
+                }
                 UnseenDot(isUnseen: isUnseen)
             }
         }

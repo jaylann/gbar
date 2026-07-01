@@ -14,6 +14,9 @@ struct PopoverContainer<Content: View>: View {
         content()
             .frame(width: width)
             .frame(maxHeight: maxHeight)
+            // Opaque base so the translucent MenuBarExtra material doesn't let the
+            // desktop bleed through and muddy the palette. The window masks corners.
+            .background(Surface.canvas)
             .density(density)
     }
 }

@@ -42,12 +42,23 @@ struct MenuContentView: View {
         .padding(.vertical, Theme.Spacing.sm)
     }
 
+    /// Opening a window from an `LSUIElement` agent app is a two-part problem: the app
+    /// runs with `.accessory` activation policy, so its windows show but can't become
+    /// key — text fields silently swallow no keystrokes. Promote to `.regular` and
+    /// activate so the Settings window can take keyboard focus; `SettingsView` drops
+    /// back to `.accessory` (no Dock icon) when it closes.
+    private func openSettingsWindow() {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+    }
+
     @ViewBuilder
     private var content: some View {
         if !store.isSignedIn {
-            SignInPromptView { openSettings() }
+            SignInPromptView { openSettingsWindow() }
         } else if store.sessionExpired {
-            ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettings() }
+            ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
         } else if let message = store.lastErrorMessage {
             ErrorStateView(kind: .generic) { Task { await store.refresh() } }
                 .help(message)
@@ -96,14 +107,14 @@ struct MenuContentView: View {
 
     private var footer: some View {
         HStack {
-            SettingsLink { Text("Settings…") }
+            Button("Settings…") { openSettingsWindow() }
                 .buttonStyle(GBButtonStyle(variant: .ghost))
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(GBButtonStyle(variant: .ghost))
         }
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.xs)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.sm)
     }
 }
 

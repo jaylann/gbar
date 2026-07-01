@@ -5,6 +5,12 @@ import SwiftUI
 /// a scanned list stays quiet and only the pointed-at row lifts. Deliberately
 /// tint-neutral (built on `Color.primary`/`link`) so it reads on both appearances.
 enum Surface {
+    /// The popover's opaque base. The `MenuBarExtra(.window)` material is very
+    /// translucent, so the desktop bleeds through and muddies every color — this solid
+    /// (very slightly lifted in dark, so it reads as foreground over the menu bar)
+    /// makes the palette render true, like the gallery.
+    static let canvas = Color(light: "FFFFFF", dark: "1F2023")
+
     /// Fill under the row the pointer is over. Barely-there so scanning isn't noisy.
     static let rowHover = Color.primary.opacity(0.06)
 
