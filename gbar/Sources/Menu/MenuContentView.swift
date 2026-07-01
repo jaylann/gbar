@@ -342,7 +342,7 @@ struct MenuContentView: View {
                 }
             }
         } else if storeIsEmpty, store.sessionExpired {
-            ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
+            reconnectState
         } else if storeIsEmpty, let message = store.lastErrorMessage {
             ErrorStateView(kind: .generic) { Task { await store.refresh() } }
                 .help(message)
@@ -378,6 +378,40 @@ struct MenuContentView: View {
 /// Filtering predicates and row builders, split into an extension to keep the primary view
 /// body within the type-length limit.
 extension MenuContentView {
+    // MARK: Reconnect (per-account 401 recovery)
+
+    /// The session-expired takeover. When the expired account can reconnect in place (OAuth + a
+    /// known client ID), offer a one-click device-flow "Reconnect <login>" that re-auths without
+    /// leaving the popover; otherwise (a PAT, or no stored client ID) fall back to opening
+    /// Settings. `reauthStatus` drives the intermediate states (user code, failure retry).
+    @ViewBuilder
+    private var reconnectState: some View {
+        switch store.reauthStatus {
+        case .idle:
+            if store.canReconnect, let login = store.expiredAccount?.login {
+                ErrorStateView(kind: .authExpired, retryTitle: "Reconnect \(login)") { reconnect() }
+            } else {
+                ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
+            }
+        case .starting:
+            ErrorStateView(kind: .authExpired, messageOverride: "Starting reconnect…")
+        case let .awaitingAuthorization(code):
+            ErrorStateView(
+                kind: .authExpired,
+                messageOverride: "Enter code \(code) in the browser, then approve gbar to reconnect."
+            )
+        case let .failed(message):
+            ErrorStateView(kind: .authExpired, messageOverride: message, retryTitle: "Try again") { reconnect() }
+        }
+    }
+
+    /// Kick off an in-place device-flow reconnect for the expired account, opening the
+    /// verification URL via the environment's `openURL` (the store stays UI-framework-light and
+    /// just hands back the URL).
+    private func reconnect() {
+        Task { await store.reconnect { url in openURL(url) } }
+    }
+
     // MARK: Filtering
 
     /// Apply a per-item predicate to each section and drop the sections left empty, keeping the

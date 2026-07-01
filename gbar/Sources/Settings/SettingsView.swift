@@ -11,8 +11,29 @@ struct SettingsView: View {
     @State private var patToken = ""
     /// Optional per-account host override for the account being added (blank = default host).
     @State private var addHost = ""
-    @State private var status = ""
-    @State private var isWorking = false
+    /// Typed sign-in state, rendered as a loading / error / success line under the add-account
+    /// controls. Replaces the old free-form status string so failures read as actionable copy.
+    @State private var status: AuthStatus = .idle
+    /// Which entry last ran, so the failure state's "Try again" re-runs the right one.
+    @State private var lastAttempt: AuthAttempt?
+
+    /// Typed sign-in status backing the add-account section's inline feedback.
+    private enum AuthStatus: Equatable {
+        case idle
+        case working(String)
+        case failure(String)
+        case success(String)
+
+        var isWorking: Bool {
+            if case .working = self { true } else { false }
+        }
+    }
+
+    /// The add-account entry point a user last used — drives the failure-state retry.
+    private enum AuthAttempt {
+        case deviceFlow
+        case pat
+    }
 
     var body: some View {
         Form {
@@ -79,15 +100,49 @@ struct SettingsView: View {
             .font(.caption)
             .foregroundStyle(.secondary)
             TextField("OAuth App client ID", text: $clientID)
-            Button("Sign in with GitHub") { Task { await startDeviceFlow() } }
-                .disabled(clientID.isEmpty || isWorking)
+            Button("Sign in with GitHub") {
+                lastAttempt = .deviceFlow
+                Task { await startDeviceFlow() }
+            }
+            .disabled(clientID.isEmpty || status.isWorking)
             Divider()
             SecureField("…or paste a personal access token", text: $patToken)
-            Button("Add token") { Task { await addToken() } }
-                .disabled(patToken.isEmpty || isWorking)
-            if !status.isEmpty {
-                Text(status).font(.caption).foregroundStyle(.secondary)
+            Button("Add token") {
+                lastAttempt = .pat
+                Task { await addToken() }
             }
+            .disabled(patToken.isEmpty || status.isWorking)
+            statusView
+        }
+    }
+
+    /// Inline sign-in feedback: a spinner while working, a red actionable error with a retry
+    /// affordance on failure, or a green confirmation on success.
+    @ViewBuilder
+    private var statusView: some View {
+        switch status {
+        case .idle:
+            EmptyView()
+        case let .working(message):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text(message)
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        case let .failure(message):
+            VStack(alignment: .leading, spacing: 6) {
+                Label(message, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                Button("Try again") { retry() }
+                    .controlSize(.small)
+                    .disabled(status.isWorking)
+            }
+        case let .success(message):
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
         }
     }
 
@@ -152,37 +207,51 @@ struct SettingsView: View {
     }
 
     private func startDeviceFlow() async {
-        isWorking = true
-        status = "Requesting a device code…"
-        defer { isWorking = false }
+        status = .working("Requesting a device code…")
         let host = resolvedAddURL
+        // Persist the (public) client ID on the store so a later 401 can reconnect this account
+        // in place without the user re-entering it.
+        store.oauthClientID = clientID
         let client = DeviceFlowClient(
             clientID: clientID,
             webBaseURL: AppConfig.webBaseURL(forAPI: host)
         )
         do {
-            let code = try await client.requestDeviceCode(scopes: ["repo", "notifications"])
-            status = "Enter code \(code.userCode) in the browser window…"
+            let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
+            status = .working("Enter code \(code.userCode) in the browser window…")
             if let url = URL(string: code.verificationURI) { openURL(url) }
             let token = try await client.pollForToken(code)
             try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
-            status = "Connected \(store.accounts.last.map { "@\($0.login)" } ?? "")."
+            status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
             resetInputs()
         } catch {
-            status = "Sign-in failed: \(error.localizedDescription)"
+            status = .failure(AuthErrorCopy.message(for: error))
         }
     }
 
+    /// Validate + add a pasted PAT. `addAccount` calls `currentUser()`, so a bad/expired token
+    /// fails here with a clear message instead of silently on the first background poll.
     private func addToken() async {
-        isWorking = true
-        status = "Validating token…"
-        defer { isWorking = false }
+        status = .working("Validating token…")
+        // Trim so a token copied with a trailing newline/spaces doesn't get rejected as invalid.
+        let token = patToken.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            try await store.addAccount(token: patToken, kind: .personalAccessToken, apiBaseURL: resolvedAddURL)
-            status = "Added \(store.accounts.last.map { "@\($0.login)" } ?? "")."
+            try await store.addAccount(token: token, kind: .personalAccessToken, apiBaseURL: resolvedAddURL)
+            status = .success("Added \(store.accounts.last.map { "@\($0.login)" } ?? "").")
             resetInputs()
         } catch {
-            status = "Couldn't add token: \(error.localizedDescription)"
+            status = .failure(AuthErrorCopy.message(for: error))
+        }
+    }
+
+    /// Re-run whichever add-account entry the user last attempted. The PAT field is preserved
+    /// until a success, so a PAT retry still has its token; the host/client-ID fields likewise
+    /// persist for a device-flow retry.
+    private func retry() {
+        switch lastAttempt {
+        case .deviceFlow: Task { await startDeviceFlow() }
+        case .pat: Task { await addToken() }
+        case .none: break
         }
     }
 }

@@ -20,6 +20,14 @@ final class AppConfigWebHostTests: XCTestCase {
         XCTAssertEqual(web.absoluteString, "https://ghe.example.com:8443")
     }
 
+    func testEnterprisePreservesSchemeAndPort() throws {
+        // A self-hosted Enterprise instance on plain http and a non-standard port: both the
+        // scheme and the port must carry through to the derived web host.
+        let api = try XCTUnwrap(URL(string: "http://ghe.internal:3000/api/v3"))
+        let web = AppConfig.webBaseURL(forAPI: api)
+        XCTAssertEqual(web.absoluteString, "http://ghe.internal:3000")
+    }
+
     func testUnparsableFallsBackToPublicHost() throws {
         let api = try XCTUnwrap(URL(string: "file:///local/path"))
         let web = AppConfig.webBaseURL(forAPI: api)

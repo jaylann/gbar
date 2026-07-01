@@ -38,6 +38,9 @@ struct ErrorStateView: View {
     }
 
     let kind: Kind
+    /// Replaces `kind.message` when set — lets a caller show live copy (e.g. a device-flow user
+    /// code during an in-place reconnect) while keeping the kind's symbol and title.
+    var messageOverride: String?
     var retryTitle = "Retry"
     var onRetry: (() -> Void)?
 
@@ -49,7 +52,7 @@ struct ErrorStateView: View {
             Text(kind.title)
                 .font(Theme.Typography.rowTitle)
                 .foregroundStyle(.primary)
-            Text(kind.message)
+            Text(messageOverride ?? kind.message)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

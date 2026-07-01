@@ -25,6 +25,15 @@ final class AppStore {
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
+    /// The account whose token last returned a 401, if any — drives the per-account "Reconnect
+    /// <login>" prompt (see `AppStore+Reauth`). `nil` when no session is expired. If several
+    /// accounts expire at once, this tracks the first in account order — a documented v1
+    /// simplification; the user can repeat the reconnect for the next one.
+    private(set) var expiredAccountID: Account.ID?
+    /// Progress of an in-place device-flow reconnect triggered from the 401 prompt. `.idle`
+    /// except while a reconnect is running (or just failed). Driven by `reconnect(openURL:)` in
+    /// `AppStore+Reauth` (internal setter so that extension can update it).
+    var reauthStatus: ReauthStatus = .idle
     /// True once at least one refresh has completed — lets the UI tell "first load"
     /// (show a skeleton) apart from "loaded and genuinely empty" (show caught-up).
     private(set) var hasLoaded = false
@@ -42,6 +51,16 @@ final class AppStore {
     }
 
     static let apiBaseURLKey = "gbar.apiBaseURL"
+
+    /// The OAuth App client ID last used for a device-flow sign-in. A **public** identifier (not
+    /// a secret — those live in the Keychain), so it's persisted in UserDefaults, letting the 401
+    /// "Reconnect" re-run the device flow in place without the user re-entering it. Defaults to
+    /// the build's baked client ID (blank on self-host builds until the user supplies one).
+    var oauthClientID: String {
+        didSet { UserDefaults.standard.set(oauthClientID, forKey: Self.oauthClientIDKey) }
+    }
+
+    static let oauthClientIDKey = "gbar.oauthClientID"
 
     /// The active account filter (`nil` = All). Persisted so the chosen scope survives relaunch.
     var accountFilter: Account.ID? {
@@ -229,6 +248,9 @@ final class AppStore {
         } else {
             apiBaseURL = AppConfig.defaultAPIBaseURL
         }
+        // Restore the last-used OAuth client ID, falling back to the build's baked one (blank on
+        // self-host builds). Public identifier, so UserDefaults is fine.
+        oauthClientID = UserDefaults.standard.string(forKey: Self.oauthClientIDKey) ?? AppConfig.bakedClientID ?? ""
         // Validate the restored value against the known intervals so a corrupt/legacy default
         // (e.g. a tiny 0.001 that would spin the loop hot) can't reach the poll loop.
         if UserDefaults.standard.object(forKey: Self.pollIntervalKey) != nil,
@@ -291,6 +313,7 @@ final class AppStore {
         token: String = "test-token"
     ) {
         self.apiBaseURL = apiBaseURL
+        oauthClientID = ""
         pollInterval = PollInterval.off.rawValue
         savedQueries = SearchQuery.defaults
         self.accounts = accounts
@@ -426,10 +449,13 @@ extension AppStore {
     }
 
     /// Any 401 surfaces the reconnect prompt; otherwise the first non-auth error message wins.
+    /// Records which account expired (first in account order) so the prompt can offer a
+    /// per-account "Reconnect <login>" rather than a global sign-in.
     private func applyErrorState(from loads: [Account.ID: AccountLoad]) {
-        let expired = loads.values.contains(where: \.sessionExpired)
-        sessionExpired = expired
-        if expired {
+        let expired = accounts.first { loads[$0.id]?.sessionExpired == true }
+        sessionExpired = expired != nil
+        expiredAccountID = expired?.id
+        if expired != nil {
             lastErrorMessage = "Session expired — reconnect in Settings."
         } else {
             lastErrorMessage = loads.values.compactMap(\.errorMessage).first
@@ -483,6 +509,8 @@ extension AppStore {
         checksGeneration += 1
         lastErrorMessage = nil
         sessionExpired = false
+        expiredAccountID = nil
+        reauthStatus = .idle
         startPolling()
         await refresh()
     }
@@ -544,6 +572,8 @@ extension AppStore {
         prChecks = [:]
         hasLoaded = false
         sessionExpired = false
+        expiredAccountID = nil
+        reauthStatus = .idle
         lastErrorMessage = nil
         // Reset every notification baseline so the next sign-in re-seeds silently instead of
         // firing a banner for every pre-existing item.

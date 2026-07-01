@@ -446,6 +446,65 @@ final class AppStoreTests: XCTestCase {
         XCTAssertFalse(store.isSignedIn)
     }
 
+    // MARK: - Per-account reconnect (401 recovery)
+
+    func testUnauthorizedTracksExpiredAccountAndAllowsReconnect() async throws {
+        var fake = FakeGitHubAPI()
+        fake.error = GitHubClient.ClientError.http(401)
+        let account = try makeAccount(login: "octocat") // .oauth
+        let store = try makeStore(api: fake, accounts: [account])
+        store.oauthClientID = "public-client-id"
+
+        await store.refresh()
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.expiredAccountID, "octocat")
+        XCTAssertEqual(store.expiredAccount?.login, "octocat")
+        XCTAssertTrue(store.canReconnect)
+    }
+
+    func testPATAccountCannotReconnectInPlace() async throws {
+        var fake = FakeGitHubAPI()
+        fake.error = GitHubClient.ClientError.http(401)
+        let url = try makeURL()
+        let pat = Account(login: "octocat", avatarURL: nil, kind: .personalAccessToken, apiBaseURL: url)
+        let store = try makeStore(api: fake, accounts: [pat])
+        store.oauthClientID = "public-client-id"
+
+        await store.refresh()
+
+        XCTAssertEqual(store.expiredAccountID, "octocat")
+        // A PAT has no device flow to re-run, so reconnect-in-place is unavailable.
+        XCTAssertFalse(store.canReconnect)
+    }
+
+    func testOAuthWithoutClientIDCannotReconnect() async throws {
+        var fake = FakeGitHubAPI()
+        fake.error = GitHubClient.ClientError.http(401)
+        let account = try makeAccount(login: "octocat")
+        let store = try makeStore(api: fake, accounts: [account])
+        store.oauthClientID = "" // e.g. a self-host build with no baked/entered client ID
+
+        await store.refresh()
+
+        XCTAssertEqual(store.expiredAccountID, "octocat")
+        XCTAssertFalse(store.canReconnect)
+    }
+
+    func testHealthyRefreshLeavesNoExpiredAccount() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = SearchIssue.stubs(count: 1)
+        let store = try makeStore(api: fake)
+        store.oauthClientID = "public-client-id"
+
+        await store.refresh()
+
+        XCTAssertFalse(store.sessionExpired)
+        XCTAssertNil(store.expiredAccountID)
+        XCTAssertNil(store.expiredAccount)
+        XCTAssertFalse(store.canReconnect)
+    }
+
     // MARK: - Legacy migration
 
     func testLegacyTokenMigratesToSingleAccount() async throws {
