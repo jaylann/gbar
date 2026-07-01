@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// SwiftUI `Color` from a hex string, e.g. `"E8843C"` or `"#E8843C"`.
@@ -25,6 +26,16 @@ extension Color {
         }
         self.init(.sRGB, red: r, green: g, blue: b, opacity: a)
     }
+
+    /// Appearance-adaptive color from two hex strings: a deep tone for light mode,
+    /// a slightly lifted (still rich) tone for dark mode so it stays legible on the
+    /// dark popover material. Avoids stock system colors, which read too bright.
+    init(light: String, dark: String) {
+        self.init(nsColor: NSColor(name: nil) { appearance in
+            let isDark = appearance.bestMatch(from: [.aqua, .darkAqua]) == .darkAqua
+            return NSColor(Color(hex: isDark ? dark : light))
+        })
+    }
 }
 
 /// Design token layer: the single source of truth for color, spacing, radii, and
@@ -38,12 +49,13 @@ enum Theme {
         /// gbar brand accent — the one fixed brand color.
         static let accent = Color(hex: "E8843C")
 
-        // GitHub-convention issue/PR state colors, mapped to system semantics.
-        static let open = Color.green
-        static let merged = Color.purple
-        static let closed = Color.red
-        static let draft = Color.secondary
-        static let pending = Color.yellow
+        // GitHub-convention issue/PR state colors, as deep/rich appearance-adaptive
+        // tones (Primer-style) rather than the too-bright stock system colors.
+        static let open = Color(light: "1A7F37", dark: "2EA043")
+        static let merged = Color(light: "6639BA", dark: "8957E5")
+        static let closed = Color(light: "B62324", dark: "E5484D")
+        static let draft = Color(light: "57606A", dark: "768390")
+        static let pending = Color(light: "9A6700", dark: "C69026")
     }
 
     // MARK: - Spacing (8pt grid)
