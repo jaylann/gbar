@@ -81,8 +81,12 @@ final class AppStore {
         } else {
             apiBaseURL = AppConfig.defaultAPIBaseURL
         }
-        if UserDefaults.standard.object(forKey: Self.pollIntervalKey) != nil {
-            pollInterval = UserDefaults.standard.double(forKey: Self.pollIntervalKey)
+        // Validate the restored value against the known intervals so a corrupt/legacy default
+        // (e.g. a tiny 0.001 that would spin the loop hot) can't reach the poll loop.
+        if UserDefaults.standard.object(forKey: Self.pollIntervalKey) != nil,
+           let stored = PollInterval(rawValue: UserDefaults.standard.double(forKey: Self.pollIntervalKey))
+        {
+            pollInterval = stored.rawValue
         } else {
             pollInterval = PollInterval.m1.rawValue
         }
