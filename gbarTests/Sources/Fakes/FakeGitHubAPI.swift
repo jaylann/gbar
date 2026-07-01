@@ -29,6 +29,9 @@ struct FakeGitHubAPI: GitHubAPI {
     var notificationsResult: [GitHubNotification] = []
     /// When set, every call throws this error instead of returning results.
     var error: Error?
+    /// When set, only `notifications()` throws this error — section queries still succeed.
+    /// Lets tests exercise the best-effort guarantee (a flaky inbox never blanks sections).
+    var notificationsError: Error?
     /// Captures side-effecting calls (e.g. mark-as-read) for assertions.
     var recorder = CallRecorder()
 
@@ -63,7 +66,7 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 
     func notifications() async throws -> [GitHubNotification] {
-        if let error {
+        if let error = notificationsError ?? error {
             throw error
         }
         return notificationsResult
@@ -106,15 +109,20 @@ extension SearchIssue {
 extension GitHubNotification {
     /// Builds a `GitHubNotification` for tests by decoding a synthetic payload, mirroring
     /// `SearchIssue.stub` so tests don't lean on the (non-public) memberwise initializer.
+    ///
+    /// `subjectURL` defaults to a public-GitHub PR API URL; pass a custom string (e.g. an
+    /// Enterprise/Issue URL) to override, or `nil` to emit a `null` subject URL.
     static func stub(
         id: String,
         unread: Bool = true,
         reason: String = "review_requested",
         type: String = "PullRequest",
         repo: String = "octo/repo",
-        title: String = "Stub notification"
+        title: String = "Stub notification",
+        subjectURL: String? = "https://api.github.com/repos/octo/repo/pulls/1"
     )
     -> GitHubNotification {
+        let urlLine = subjectURL.map { "\"url\": \"\($0)\"" } ?? "\"url\": null"
         let json = """
         {
           "id": "\(id)",
@@ -124,7 +132,7 @@ extension GitHubNotification {
           "subject": {
             "title": "\(title)",
             "type": "\(type)",
-            "url": "https://api.github.com/repos/\(repo)/pulls/1"
+            \(urlLine)
           },
           "repository": { "full_name": "\(repo)" }
         }

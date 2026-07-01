@@ -86,6 +86,23 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.lastErrorMessage)
     }
 
+    func testNotificationsFailureKeepsSectionsPopulated() async throws {
+        struct Boom: Error {}
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = SearchIssue.stubs(count: 2)
+        // Only the inbox fetch fails; section queries still succeed.
+        fake.notificationsError = Boom()
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        // Best-effort guarantee: a flaky /notifications never blanks the section lists.
+        XCTAssertEqual(store.sections.count, 4)
+        XCTAssertTrue(store.sections.allSatisfy { !$0.items.isEmpty })
+        XCTAssertTrue(store.notifications.isEmpty)
+        XCTAssertEqual(store.lastErrorMessage, "Failed to load notifications.")
+    }
+
     func testMarkReadCallsAPIAndDropsItem() async throws {
         var fake = FakeGitHubAPI()
         fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]

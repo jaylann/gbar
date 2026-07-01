@@ -40,7 +40,40 @@ final class NotificationMappingTests: XCTestCase {
 
     func testHTMLURLRewritesAPIURL() throws {
         let notification = GitHubNotification.stub(id: "1", type: "PullRequest", repo: "octo/repo")
-        let url = try XCTUnwrap(notification.htmlURL)
+        let api = try XCTUnwrap(URL(string: "https://api.github.com"))
+        let url = try XCTUnwrap(notification.htmlURL(apiBaseURL: api))
         XCTAssertEqual(url.absoluteString, "https://github.com/octo/repo/pull/1")
+    }
+
+    func testHTMLURLUsesEnterpriseWebHost() throws {
+        let notification = GitHubNotification.stub(
+            id: "1",
+            type: "PullRequest",
+            repo: "octo/repo",
+            subjectURL: "https://ghe.example.com/api/v3/repos/octo/repo/pulls/7"
+        )
+        let api = try XCTUnwrap(URL(string: "https://ghe.example.com/api/v3"))
+        let url = try XCTUnwrap(notification.htmlURL(apiBaseURL: api))
+        // Enterprise: web host is scheme+host of the API base, and the `/api/v3` prefix is
+        // dropped — not string-replaced against a hardcoded `api.github.com`.
+        XCTAssertEqual(url.absoluteString, "https://ghe.example.com/octo/repo/pull/7")
+    }
+
+    func testHTMLURLMapsIssueSubject() throws {
+        let notification = GitHubNotification.stub(
+            id: "1",
+            type: "Issue",
+            repo: "octo/repo",
+            subjectURL: "https://api.github.com/repos/octo/repo/issues/5"
+        )
+        let api = try XCTUnwrap(URL(string: "https://api.github.com"))
+        let url = try XCTUnwrap(notification.htmlURL(apiBaseURL: api))
+        XCTAssertEqual(url.absoluteString, "https://github.com/octo/repo/issues/5")
+    }
+
+    func testHTMLURLIsNilWhenSubjectURLMissing() throws {
+        let notification = GitHubNotification.stub(id: "1", subjectURL: nil)
+        let api = try XCTUnwrap(URL(string: "https://api.github.com"))
+        XCTAssertNil(notification.htmlURL(apiBaseURL: api))
     }
 }

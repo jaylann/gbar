@@ -128,9 +128,10 @@ struct MenuContentView: View {
         HoverRow {
             HStack(spacing: Theme.Spacing.xs) {
                 Button {
-                    if let url = notification.htmlURL { openURL(url) }
+                    if let url = notification.htmlURL(apiBaseURL: store.apiBaseURL) { openURL(url) }
                 } label: {
                     NotificationRow(model: NotificationRow.Model(notification))
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
 
@@ -142,6 +143,7 @@ struct MenuContentView: View {
                     }
                     .buttonStyle(GBButtonStyle(variant: .icon))
                     .help("Mark as read")
+                    .accessibilityLabel("Mark as read")
                 }
             }
         }

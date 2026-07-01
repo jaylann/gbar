@@ -243,21 +243,25 @@ final class AppStore {
             if case .http(401) = error as? GitHubClient.ClientError {
                 sessionExpired = true
                 lastErrorMessage = "Session expired — reconnect in Settings."
-            } else {
+            } else if lastErrorMessage == nil {
+                // Don't clobber a more important section error already surfaced this refresh.
                 lastErrorMessage = "Failed to load notifications."
             }
             Log.network.error("notifications fetch failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 
-    /// Mark a notification thread read on the server, then optimistically drop it from the
-    /// local inbox. On failure the item stays put and the error surfaces via `lastErrorMessage`.
+    /// Mark a notification thread read on the server, then drop it from the local inbox once
+    /// the call succeeds (pessimistic: nothing changes until the server confirms). On failure
+    /// the item stays put and the error surfaces via `lastErrorMessage`.
     func markRead(_ notification: GitHubNotification) async {
         guard let credential else { return }
         let api = makeAPI(apiBaseURL, credential.token)
         do {
             try await api.markNotificationRead(threadID: notification.id)
             notifications.removeAll { $0.id == notification.id }
+            // Clear any stale error from a prior failed mark-read now that one succeeded.
+            lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Couldn't mark notification as read."
             Log.network.error("mark notification read failed: \(error.localizedDescription, privacy: .public)")

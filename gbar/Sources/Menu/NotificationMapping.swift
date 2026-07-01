@@ -42,16 +42,22 @@ extension NotificationRow.Model {
 
 extension GitHubNotification {
     /// Best-effort browser URL for the thread. `subject.url` is an API URL
-    /// (`api.github.com/repos/{owner}/{name}/pulls/{n}`); we rewrite the host and the
-    /// `/repos/` + `pulls`→`pull` path segments the web UI uses. Note: comment threads and
-    /// some subject types have no clean web mapping, so this can be `nil` or point at the
-    /// parent resource — a full mapping would need the API `latest_comment_url`, deferred.
-    var htmlURL: URL? {
-        guard let raw = subject.url, var components = URLComponents(string: raw) else { return nil }
-        components.host = components.host?.replacingOccurrences(of: "api.github.com", with: "github.com")
-        components.path = components.path
-            .replacingOccurrences(of: "/repos/", with: "/")
+    /// (`{apiBase}/repos/{owner}/{name}/pulls/{n}`); we swap in the web host derived from
+    /// `apiBaseURL` (via `AppConfig.webBaseURL`, so Enterprise hosts work — its API path
+    /// prefix like `/api/v3` is dropped), then keep only the `/repos/`-onward segments the
+    /// web UI uses with `pulls`→`pull`. Note: comment threads and some subject types have no
+    /// clean web mapping, so this can be `nil` or point at the parent resource — a full
+    /// mapping would need the API `latest_comment_url`, deferred.
+    func htmlURL(apiBaseURL: URL) -> URL? {
+        guard let raw = subject.url,
+              let apiURL = URL(string: raw),
+              let reposRange = apiURL.path.range(of: "/repos/")
+        else { return nil }
+
+        let tail = apiURL.path[reposRange.upperBound...]
             .replacingOccurrences(of: "/pulls/", with: "/pull/")
-        return components.url
+        var components = URLComponents(url: AppConfig.webBaseURL(forAPI: apiBaseURL), resolvingAgainstBaseURL: false)
+        components?.path = "/" + tail
+        return components?.url
     }
 }
