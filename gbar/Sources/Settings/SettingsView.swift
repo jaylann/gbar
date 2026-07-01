@@ -104,7 +104,7 @@ struct SettingsView: View {
     }
 
     /// The host a newly-added account should use: the override field if filled, else the
-    /// app default. Falls back to the default on an unparseable override.
+    /// app default. Falls back to the default on an unparsable override.
     private var resolvedAddURL: URL {
         let trimmed = addHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return store.apiBaseURL }
