@@ -39,9 +39,10 @@ extension Color {
 }
 
 /// Design token layer: the single source of truth for color, spacing, radii, and
-/// type. Functional dev-tool look — no gradients, no decoration. State colors are
-/// built on system semantic colors so they adapt to light/dark automatically; only
-/// the amber brand accent is a fixed hex.
+/// type. Functional dev-tool look — no gradients, no decoration. State colors follow
+/// GitHub's Primer semantics as deep/rich appearance-adaptive tones; only the amber
+/// brand accent is a fixed hex. Interaction surfaces live in `Surface`, motion in
+/// `Motion`, row density in `DensityMode`.
 enum Theme {
     // MARK: - Palette
 
@@ -51,11 +52,15 @@ enum Theme {
 
         // GitHub-convention issue/PR state colors, as deep/rich appearance-adaptive
         // tones (Primer-style) rather than the too-bright stock system colors.
-        static let open = Color(light: "1A7F37", dark: "2EA043")
-        static let merged = Color(light: "6639BA", dark: "8957E5")
-        static let closed = Color(light: "B62324", dark: "E5484D")
-        static let draft = Color(light: "57606A", dark: "768390")
-        static let pending = Color(light: "9A6700", dark: "C69026")
+        static let open = Color(light: "1A7F37", dark: "3FB950")
+        static let merged = Color(light: "8250DF", dark: "A371F7")
+        static let closed = Color(light: "CF222E", dark: "F85149")
+        static let draft = Color(light: "6E7781", dark: "8B949E")
+        static let pending = Color(light: "9A6700", dark: "D29922")
+
+        /// Interaction blue — links, keyboard focus, the unseen dot. Kept distinct
+        /// from the amber brand accent so "actionable" and "brand" never collide.
+        static let link = Color(light: "0969DA", dark: "2F81F7")
     }
 
     // MARK: - Spacing (8pt grid)
@@ -79,11 +84,14 @@ enum Theme {
 
     enum Typography {
         /// Uppercase section headers above a group of rows.
-        static let sectionLabel = Font.caption.weight(.semibold)
+        static let sectionLabel = Font.system(size: 11, weight: .semibold)
         /// Primary text of a PR/issue row.
-        static let rowTitle = Font.callout
+        static let rowTitle = Font.system(size: 13, weight: .semibold)
         /// Secondary metadata (repo slug, number, author).
-        static let caption = Font.caption
+        static let caption = Font.system(size: 11)
+        /// Code-shaped text: `#123`, branch names, SHAs, durations. Monospaced so it
+        /// doesn't jitter when values change on refresh.
+        static let mono = Font.system(size: 11, design: .monospaced)
     }
 }
 
@@ -96,6 +104,7 @@ enum Theme {
         ("closed", Theme.Palette.closed),
         ("draft", Theme.Palette.draft),
         ("pending", Theme.Palette.pending),
+        ("link", Theme.Palette.link),
     ]
     let spacings: [(String, CGFloat)] = [
         ("xs", Theme.Spacing.xs),
@@ -137,6 +146,7 @@ enum Theme {
             Text("TYPOGRAPHY").font(Theme.Typography.sectionLabel)
             Text("Row title").font(Theme.Typography.rowTitle)
             Text("Caption metadata").font(Theme.Typography.caption).foregroundStyle(.secondary)
+            Text("feature/mono-123").font(Theme.Typography.mono).foregroundStyle(.secondary)
         }
     }
     .padding(Theme.Spacing.xl)
