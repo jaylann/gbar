@@ -147,6 +147,94 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
     }
 
+    func testRefreshHydratesPRChecks() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", headRef: "feature/ci")
+        fake.checkRunsResult = [
+            .stub(id: 1, name: "CI / build", conclusion: "success"),
+            .stub(id: 2, name: "CI / lint", conclusion: "failure"),
+        ]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        // CI hydration runs in a detached, non-blocking task — wait for it to land.
+        try await waitUntil { store.prChecks[100] != nil }
+
+        let checks = try XCTUnwrap(store.prChecks[100])
+        XCTAssertEqual(checks.status, .failure) // failure dominates the rollup
+        XCTAssertEqual(checks.checks.count, 2)
+        XCTAssertEqual(checks.checks.first?.branch, "feature/ci") // branch = head ref, not SHA
+    }
+
+    func testRefreshWithNoCheckRunsLeavesPRUnhydrated() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 200, number: 8)]
+        fake.pullRequestResult = .stub(number: 8)
+        fake.checkRunsResult = [] // empty rollup -> nil -> no entry
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        // Deterministically await the hydration wave instead of sleeping.
+        await store.awaitChecksHydration()
+
+        XCTAssertNil(store.prChecks[200])
+    }
+
+    func testRefreshPrunesPRThatDroppedOutOfList() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7)
+        fake.checkRunsResult = [.stub(id: 1, conclusion: "success")]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        try await waitUntil { store.prChecks[100] != nil }
+
+        // Next refresh returns no PRs — the previous entry must be pruned, not linger.
+        let empty = FakeGitHubAPI() // defaultResult is [] by default
+        store.makeAPI = { _, _ in empty }
+        await store.refresh()
+
+        // Pruning happens synchronously at the start of the hydration wave.
+        XCTAssertNil(store.prChecks[100])
+        XCTAssertTrue(store.prChecks.isEmpty)
+    }
+
+    func testSignOutCancelsHydrationSoPRChecksStayEmpty() async throws {
+        let gated = GatedGitHubAPI(
+            search: [SearchIssue.stub(id: 300, number: 9)],
+            pullRequest: .stub(number: 9),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        let store = try makeStore(api: FakeGitHubAPI())
+        store.makeAPI = { _, _ in gated }
+
+        await store.refresh()
+        // Wait until the wave is parked inside `checkRuns`, then pull the rug: sign out.
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+        store.signOut()
+        // Let the parked call finish; the stale-generation guard must drop its result.
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(store.prChecks.isEmpty)
+        XCTAssertNil(store.prChecks[300])
+    }
+
+    /// Polls `condition` on the main actor until true or the timeout elapses.
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline {
+                XCTFail("timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     func testBadgeCountSumsOnlyActionableSections() async throws {
         var fake = FakeGitHubAPI()
         // Distinct counts per query so we can verify which sections contribute.

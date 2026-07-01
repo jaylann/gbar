@@ -23,6 +23,8 @@ protocol GitHubAPI: Sendable {
     func markNotificationRead(threadID: String) async throws
     /// Fetch the signed-in user's notifications.
     func notifications() async throws -> [GitHubNotification]
+    /// Fetch the check runs for a commit (`owner/name` slug + git ref/SHA).
+    func checkRuns(repo: String, ref: String) async throws -> [CheckRun]
 }
 
 /// Live GitHub REST client. v1 uses polling over `/search/issues`; richer surfaces
@@ -88,6 +90,12 @@ struct GitHubClient: GitHubAPI {
         let request = try makeRequest(path: "notifications")
         let data = try await execute(request)
         return try Self.decoder.decode([GitHubNotification].self, from: data)
+    }
+
+    func checkRuns(repo: String, ref: String) async throws -> [CheckRun] {
+        let request = try makeRequest(path: "repos/\(repo)/commits/\(ref)/check-runs")
+        let data = try await execute(request)
+        return try Self.decoder.decode(CheckRunsResponse.self, from: data).checkRuns
     }
 
     // MARK: - Request plumbing

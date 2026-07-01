@@ -149,27 +149,20 @@ struct MenuContentView: View {
         }
     }
 
+    @ViewBuilder
     private func row(_ item: SearchIssue) -> some View {
-        // The open-URL button and the quick-action buttons are siblings inside HoverRow (not
-        // nested), so tapping Approve/Merge doesn't also fire the row's open-URL action. The
-        // accessory only takes hits while revealed (see HoverRow.allowsHitTesting).
-        HoverRow(trailingAccessory: {
-            // PR-only: issues keep their plain row.
-            if item.isPullRequest {
-                PRQuickActions(store: store, item: item)
-            }
-        }, content: {
+        if item.isPullRequest {
+            // PRs get the CI disclosure + hover quick actions (both live inside PRRowItem so
+            // the open-URL, Approve/Merge, and expand controls are siblings, not nested).
+            PRRowItem(store: store, item: item, checks: store.prChecks[item.id]) { url in openURL(url) }
+        } else {
             Button {
                 if let url = URL(string: item.htmlURL) { openURL(url) }
             } label: {
-                if item.isPullRequest {
-                    PRRow(issue: item)
-                } else {
-                    IssueRow(issue: item)
-                }
+                HoverRow { IssueRow(issue: item) }
             }
             .buttonStyle(.plain)
-        })
+        }
     }
 
     private var footer: some View {
@@ -182,6 +175,73 @@ struct MenuContentView: View {
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.sm)
+    }
+}
+
+/// A PR list row: the tappable open-in-browser row plus, when CI has been hydrated,
+/// a leading disclosure that expands the per-check `CheckRow` detail. The disclosure is
+/// a sibling of the open-URL button (not nested), so toggling it never opens the PR.
+private struct PRRowItem: View {
+    let store: AppStore
+    let item: SearchIssue
+    let checks: PRChecks?
+    var openURL: (URL) -> Void
+
+    @State private var expanded = false
+
+    /// Leading gutter reserved for the disclosure chevron so PR titles align whether or
+    /// not a row has checks to expand.
+    private let gutter: CGFloat = Theme.Spacing.lg
+
+    private var checkModels: [CheckRow.Model] {
+        checks?.checks ?? []
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 0) {
+                disclosure
+                // The open-URL button and the quick-action buttons are siblings inside HoverRow
+                // (not nested), so tapping Approve/Merge doesn't also fire the row's open-URL
+                // action. The accessory only takes hits while revealed (see HoverRow).
+                HoverRow(trailingAccessory: {
+                    PRQuickActions(store: store, item: item)
+                }, content: {
+                    Button {
+                        if let url = URL(string: item.htmlURL) { openURL(url) }
+                    } label: {
+                        PRRow(issue: item, ci: checks?.status)
+                    }
+                    .buttonStyle(.plain)
+                })
+            }
+            if expanded {
+                ForEach(checkModels) { model in
+                    HoverRow { CheckRow(model: model) }
+                        .padding(.leading, gutter)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var disclosure: some View {
+        if !checkModels.isEmpty {
+            Button {
+                withAnimation(Motion.spring) { expanded.toggle() }
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(expanded ? 90 : 0))
+                    .frame(width: gutter)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(expanded ? "Hide checks" : "Show checks")
+        } else {
+            Color.clear.frame(width: gutter, height: 1)
+        }
     }
 }
 

@@ -73,6 +73,13 @@ struct SearchIssue: Decodable, Identifiable {
 /// The full detail for a single pull request (`GET /repos/{owner}/{repo}/pulls/{number}`) —
 /// a superset of `SearchIssue` with merge state used by quick actions.
 struct PullRequestDetail: Decodable {
+    /// The PR's head commit — `sha` is the ref check-runs are queried against; `ref` is the
+    /// branch name shown in the check rows.
+    struct Head: Decodable {
+        let sha: String
+        let ref: String
+    }
+
     let id: Int
     let number: Int
     let title: String
@@ -84,6 +91,7 @@ struct PullRequestDetail: Decodable {
     let user: GitHubUser?
     let createdAt: Date
     let updatedAt: Date?
+    let head: Head
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -97,6 +105,37 @@ struct PullRequestDetail: Decodable {
         case user
         case createdAt = "created_at"
         case updatedAt = "updated_at"
+        case head
+    }
+}
+
+/// One check run for a commit (`GET /repos/{owner}/{repo}/commits/{ref}/check-runs`).
+/// `status` is the lifecycle (`queued`/`in_progress`/`completed`); `conclusion` is the
+/// outcome (`success`/`failure`/…), populated only once `status == completed`.
+struct CheckRun: Decodable, Identifiable {
+    let id: Int
+    let name: String
+    let status: String
+    let conclusion: String?
+    let startedAt: Date?
+    let completedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case status
+        case conclusion
+        case startedAt = "started_at"
+        case completedAt = "completed_at"
+    }
+}
+
+/// The envelope `GET .../check-runs` returns: a total plus the runs themselves.
+struct CheckRunsResponse: Decodable {
+    let checkRuns: [CheckRun]
+
+    enum CodingKeys: String, CodingKey {
+        case checkRuns = "check_runs"
     }
 }
 
