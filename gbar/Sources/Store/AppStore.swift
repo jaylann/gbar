@@ -30,6 +30,12 @@ final class AppStore {
         credential != nil
     }
 
+    /// Count of actionable PRs — review-requested plus assigned — shown on the menu-bar icon.
+    var badgeCount: Int {
+        let actionable: Set = ["review-requested", "assigned-prs"]
+        return sections.filter { actionable.contains($0.id) }.reduce(0) { $0 + $1.items.count }
+    }
+
     init() {
         if let stored = UserDefaults.standard.string(forKey: Self.apiBaseURLKey), let url = URL(string: stored) {
             apiBaseURL = url
