@@ -20,6 +20,7 @@ final class CallRecorder: @unchecked Sendable {
     private var _markedThreadIDs: [String] = []
     private var _approvals: [Approve] = []
     private var _merges: [Merge] = []
+    private var _searchCount = 0
 
     /// Thread IDs passed to `markNotificationRead`, in call order.
     var markedThreadIDs: [String] {
@@ -32,6 +33,15 @@ final class CallRecorder: @unchecked Sendable {
 
     var merges: [Merge] {
         lock.withLock { _merges }
+    }
+
+    /// Total `searchIssues` calls received — lets a test assert a refresh ran as a single wave.
+    var searchCount: Int {
+        lock.withLock { _searchCount }
+    }
+
+    func recordSearch() {
+        lock.withLock { _searchCount += 1 }
     }
 
     func recordMarkRead(_ threadID: String) {
@@ -85,6 +95,7 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
+        recorder.recordSearch()
         if let error {
             throw error
         }
