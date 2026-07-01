@@ -73,9 +73,11 @@ struct SearchIssue: Decodable, Identifiable {
 /// The full detail for a single pull request (`GET /repos/{owner}/{repo}/pulls/{number}`) —
 /// a superset of `SearchIssue` with merge state used by quick actions.
 struct PullRequestDetail: Decodable {
-    /// The PR's head commit — carries the SHA that check-runs are queried against.
+    /// The PR's head commit — `sha` is the ref check-runs are queried against; `ref` is the
+    /// branch name shown in the check rows.
     struct Head: Decodable {
         let sha: String
+        let ref: String
     }
 
     let id: Int

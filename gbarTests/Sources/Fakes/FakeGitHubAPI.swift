@@ -118,6 +118,74 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 }
 
+/// A `GitHubAPI` fake that blocks inside `checkRuns` until the test explicitly releases it,
+/// letting tests drive the race where a CI hydration wave is in flight while state changes
+/// underneath it (e.g. sign-out). Actor isolation keeps it `Sendable`-clean.
+actor GatedGitHubAPI: GitHubAPI {
+    private let searchResult: [SearchIssue]
+    private let pullRequestResult: PullRequestDetail
+    private let checkRunsResult: [CheckRun]
+
+    private var releaseGate: CheckedContinuation<Void, Never>?
+    private var released = false
+    private var enteredGate: CheckedContinuation<Void, Never>?
+    private var entered = false
+
+    init(search: [SearchIssue], pullRequest: PullRequestDetail, checkRuns: [CheckRun]) {
+        searchResult = search
+        pullRequestResult = pullRequest
+        checkRunsResult = checkRuns
+    }
+
+    /// Suspends until `checkRuns` has been entered (the hydration wave is blocked in flight).
+    func waitUntilBlocked() async {
+        if entered { return }
+        await withCheckedContinuation { enteredGate = $0 }
+    }
+
+    /// Releases the blocked `checkRuns` call so the wave can finish.
+    func release() {
+        released = true
+        releaseGate?.resume()
+        releaseGate = nil
+    }
+
+    func searchIssues(_: String) async throws -> [SearchIssue] {
+        searchResult
+    }
+
+    func pullRequest(repo _: String, number _: Int) async throws -> PullRequestDetail {
+        pullRequestResult
+    }
+
+    func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
+        entered = true
+        enteredGate?.resume()
+        enteredGate = nil
+        if !released {
+            await withCheckedContinuation { releaseGate = $0 }
+        }
+        return checkRunsResult
+    }
+
+    private enum Unstubbed: Error { case notImplemented }
+    func approvePullRequest(repo _: String, number _: Int) async throws {
+        throw Unstubbed.notImplemented
+    }
+
+    func mergePullRequest(repo _: String, number _: Int, method _: MergeMethod) async throws {
+        throw Unstubbed.notImplemented
+    }
+
+    func markNotificationRead(threadID _: String) async throws {
+        throw Unstubbed.notImplemented
+    }
+
+    func notifications() async throws -> [GitHubNotification] {
+        throw Unstubbed.notImplemented
+    }
+}
+
 extension SearchIssue {
     /// Builds a minimal `SearchIssue` for tests by decoding a synthetic payload, so tests
     /// don't depend on the (non-public) memberwise initializer.
@@ -198,8 +266,9 @@ private let testDecoder: JSONDecoder = {
 }()
 
 extension PullRequestDetail {
-    /// Minimal detail carrying a head SHA, decoded from a synthetic payload.
-    static func stub(number: Int = 1, headSHA: String = "abc1234def") -> PullRequestDetail {
+    /// Minimal detail carrying a head SHA and branch ref, decoded from a synthetic payload.
+    static func stub(number: Int = 1, headSHA: String = "abc1234def", headRef: String = "feature/stub")
+    -> PullRequestDetail {
         let json = """
         {
           "id": \(number),
@@ -213,7 +282,7 @@ extension PullRequestDetail {
           "user": { "login": "jaylann", "avatar_url": null },
           "created_at": "2026-01-01T00:00:00Z",
           "updated_at": "2026-01-01T00:00:00Z",
-          "head": { "sha": "\(headSHA)" }
+          "head": { "sha": "\(headSHA)", "ref": "\(headRef)" }
         }
         """
         guard let detail = try? testDecoder.decode(PullRequestDetail.self, from: Data(json.utf8)) else {
