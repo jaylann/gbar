@@ -93,25 +93,31 @@ struct MenuContentView: View {
         HStack(spacing: Theme.Spacing.sm) {
             InlineTabBar(tabs: tabItems, selection: tabSelection)
             Spacer(minLength: Theme.Spacing.sm)
-            Button { toggleSearch() } label: {
-                Image(systemName: searchActive ? "xmark" : "magnifyingglass")
+            // Nudge the action icons up so their centers meet the tab labels: the tab bar
+            // reserves a 2pt underline anchor below its labels, sitting lower than these
+            // fixed-height icon buttons would otherwise center to.
+            HStack(spacing: Theme.Spacing.sm) {
+                Button { toggleSearch() } label: {
+                    Image(systemName: searchActive ? "xmark" : "magnifyingglass")
+                }
+                .buttonStyle(GBButtonStyle(variant: .icon))
+                .disabled(!showsFilters)
+                .gbTooltip(searchActive ? "Close search" : "Search", edge: .bottom)
+                Button {
+                    Task { await store.refresh() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(GBButtonStyle(variant: .icon, isLoading: store.isRefreshing))
+                .disabled(store.isRefreshing || !store.isSignedIn)
+                .gbTooltip("Refresh", edge: .bottom)
+                Button { openSettingsWindow() } label: {
+                    Image(systemName: "gearshape")
+                }
+                .buttonStyle(GBButtonStyle(variant: .icon))
+                .gbTooltip("Settings", edge: .bottom)
             }
-            .buttonStyle(GBButtonStyle(variant: .icon))
-            .disabled(!showsFilters)
-            .gbTooltip(searchActive ? "Close search" : "Search", edge: .bottom)
-            Button {
-                Task { await store.refresh() }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .buttonStyle(GBButtonStyle(variant: .icon, isLoading: store.isRefreshing))
-            .disabled(store.isRefreshing || !store.isSignedIn)
-            .gbTooltip("Refresh", edge: .bottom)
-            Button { openSettingsWindow() } label: {
-                Image(systemName: "gearshape")
-            }
-            .buttonStyle(GBButtonStyle(variant: .icon))
-            .gbTooltip("Settings", edge: .bottom)
+            .offset(y: -3)
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.sm)
