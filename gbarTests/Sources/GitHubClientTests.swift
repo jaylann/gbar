@@ -92,9 +92,56 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(first.number, 42)
         XCTAssertEqual(first.title, "Fix the thing")
     }
+
+    func testCheckRunsDecodesEnvelope() async throws {
+        let pathBox = HeaderBox()
+        MockURLProtocol.handler = { request in
+            pathBox.path = request.url?.path
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            {
+              "total_count": 2,
+              "check_runs": [
+                {
+                  "id": 100,
+                  "name": "CI / build",
+                  "status": "completed",
+                  "conclusion": "success",
+                  "started_at": "2026-01-01T00:00:00Z",
+                  "completed_at": "2026-01-01T00:01:42Z"
+                },
+                {
+                  "id": 101,
+                  "name": "CI / lint",
+                  "status": "in_progress",
+                  "conclusion": null,
+                  "started_at": "2026-01-01T00:00:05Z",
+                  "completed_at": null
+                }
+              ]
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let runs = try await client.checkRuns(repo: "octo/repo", ref: "deadbeef")
+
+        XCTAssertEqual(pathBox.path, "/repos/octo/repo/commits/deadbeef/check-runs")
+        XCTAssertEqual(runs.count, 2)
+        let first = try XCTUnwrap(runs.first)
+        XCTAssertEqual(first.id, 100)
+        XCTAssertEqual(first.name, "CI / build")
+        XCTAssertEqual(first.conclusion, "success")
+        XCTAssertEqual(runs.last?.conclusion, nil)
+    }
 }
 
 /// Reference box so the `@Sendable` handler can hand captured request headers back to the test.
 private final class HeaderBox: @unchecked Sendable {
     var headers: [String: String]?
+    var path: String?
 }

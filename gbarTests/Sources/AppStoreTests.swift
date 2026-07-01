@@ -147,6 +147,52 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
     }
 
+    func testRefreshHydratesPRChecks() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        fake.checkRunsResult = [
+            .stub(id: 1, name: "CI / build", conclusion: "success"),
+            .stub(id: 2, name: "CI / lint", conclusion: "failure"),
+        ]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        // CI hydration runs in a detached, non-blocking task — wait for it to land.
+        try await waitUntil { store.prChecks[100] != nil }
+
+        let checks = try XCTUnwrap(store.prChecks[100])
+        XCTAssertEqual(checks.status, .failure) // failure dominates the rollup
+        XCTAssertEqual(checks.checks.count, 2)
+        XCTAssertEqual(checks.checks.first?.branch, "deadbee") // 7-char head SHA
+    }
+
+    func testRefreshWithNoCheckRunsLeavesPRUnhydrated() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 200, number: 8)]
+        fake.pullRequestResult = .stub(number: 8)
+        fake.checkRunsResult = [] // empty rollup -> nil -> no entry
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        // Give the hydration task a chance to run before asserting the absence.
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertNil(store.prChecks[200])
+    }
+
+    /// Polls `condition` on the main actor until true or the timeout elapses.
+    private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() {
+            if Date() > deadline {
+                XCTFail("timed out waiting for condition")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
     func testBadgeCountSumsOnlyActionableSections() async throws {
         var fake = FakeGitHubAPI()
         // Distinct counts per query so we can verify which sections contribute.

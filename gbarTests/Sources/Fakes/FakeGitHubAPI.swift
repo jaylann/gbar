@@ -67,6 +67,10 @@ struct FakeGitHubAPI: GitHubAPI {
     var actionError: Error?
     /// Captures side-effecting calls (mark-as-read, approve, merge) for assertions.
     var recorder = CallRecorder()
+    /// Returned by `pullRequest`; defaults to a stub so CI hydration works without explicit setup.
+    var pullRequestResult: PullRequestDetail = .stub()
+    /// Returned by `checkRuns` (defaults to empty, so CI hydration is a no-op unless stubbed).
+    var checkRunsResult: [CheckRun] = []
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
         if let error {
@@ -75,12 +79,14 @@ struct FakeGitHubAPI: GitHubAPI {
         return resultsByQuery[query] ?? defaultResult
     }
 
-    /// Detail/notification endpoints aren't exercised by these tests; stub them so the fake
-    /// satisfies the full `GitHubAPI` surface. Each throws so an accidental call fails loudly.
-    private enum Unstubbed: Error { case notImplemented }
-
+    /// Returns the injected PR detail and check runs; CI hydration tests rely on these
+    /// succeeding, so neither endpoint throws unless a global `error` is set elsewhere.
     func pullRequest(repo _: String, number _: Int) async throws -> PullRequestDetail {
-        throw Unstubbed.notImplemented
+        pullRequestResult
+    }
+
+    func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
+        checkRunsResult
     }
 
     /// Records the approval, then throws `error` if one is injected so error paths are testable.
@@ -182,5 +188,64 @@ extension GitHubNotification {
             fatalError("GitHubNotification.stub produced invalid JSON")
         }
         return notification
+    }
+}
+
+private let testDecoder: JSONDecoder = {
+    let decoder = JSONDecoder()
+    decoder.dateDecodingStrategy = .iso8601
+    return decoder
+}()
+
+extension PullRequestDetail {
+    /// Minimal detail carrying a head SHA, decoded from a synthetic payload.
+    static func stub(number: Int = 1, headSHA: String = "abc1234def") -> PullRequestDetail {
+        let json = """
+        {
+          "id": \(number),
+          "number": \(number),
+          "title": "Stub PR",
+          "state": "open",
+          "html_url": "https://github.com/octo/repo/pull/\(number)",
+          "merged": false,
+          "mergeable": true,
+          "draft": false,
+          "user": { "login": "jaylann", "avatar_url": null },
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-01-01T00:00:00Z",
+          "head": { "sha": "\(headSHA)" }
+        }
+        """
+        guard let detail = try? testDecoder.decode(PullRequestDetail.self, from: Data(json.utf8)) else {
+            fatalError("PullRequestDetail.stub produced invalid JSON")
+        }
+        return detail
+    }
+}
+
+extension CheckRun {
+    /// A single check run stub with an explicit lifecycle/outcome.
+    static func stub(
+        id: Int = 1,
+        name: String = "CI / build",
+        status: String = "completed",
+        conclusion: String? = "success"
+    )
+    -> CheckRun {
+        let conclusionJSON = conclusion.map { "\"\($0)\"" } ?? "null"
+        let json = """
+        {
+          "id": \(id),
+          "name": "\(name)",
+          "status": "\(status)",
+          "conclusion": \(conclusionJSON),
+          "started_at": "2026-01-01T00:00:00Z",
+          "completed_at": "2026-01-01T00:01:42Z"
+        }
+        """
+        guard let run = try? testDecoder.decode(CheckRun.self, from: Data(json.utf8)) else {
+            fatalError("CheckRun.stub produced invalid JSON")
+        }
+        return run
     }
 }

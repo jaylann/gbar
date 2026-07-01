@@ -8,6 +8,13 @@ struct LoadedSection: Identifiable {
     let items: [SearchIssue]
 }
 
+/// The rolled-up CI status for one PR plus its per-check detail rows, hydrated lazily
+/// after a refresh (see `AppStore.prChecks`).
+struct PRChecks {
+    let status: CIStatus
+    let checks: [CheckRow.Model]
+}
+
 /// How often the store polls GitHub in the background. Raw value is the interval in seconds;
 /// `.off` (0) disables auto-refresh entirely.
 enum PollInterval: TimeInterval, CaseIterable, Identifiable {
@@ -43,6 +50,10 @@ final class AppStore {
     /// The signed-in user's notification inbox (`GET /notifications`). Loaded best-effort
     /// alongside sections so a notifications failure never blanks the PR/issue lists.
     private(set) var notifications: [GitHubNotification] = []
+    /// Best-effort CI status per PR, keyed by `SearchIssue.id`. Kept in a side map (not on
+    /// `LoadedSection`) because it's hydrated asynchronously after the initial load and is
+    /// decorative — a failure here never blocks the list or surfaces an error.
+    private(set) var prChecks: [Int: PRChecks] = [:]
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
@@ -70,6 +81,14 @@ final class AppStore {
 
     /// The single in-flight poll loop, if any. `@MainActor`-isolated like the rest of the store.
     private var pollTask: Task<Void, Never>?
+
+    /// Bumped on every `refresh()` so a slow, in-flight CI hydration from a previous refresh
+    /// can detect it's stale and drop its writes instead of clobbering fresher results.
+    private var checksGeneration = 0
+
+    /// Max concurrent PR-detail+check-runs fetches during CI hydration — this is an N+1 over
+    /// the PR list (two requests each), so cap it to stay friendly to GitHub's rate limit.
+    private static let checksConcurrency = 5
 
     /// Builds the API client used by `refresh()`. Overridable so tests can inject a fake
     /// `GitHubAPI` without touching the network; defaults to the live `GitHubClient`.
@@ -176,6 +195,7 @@ final class AppStore {
         credential = nil
         sections = []
         notifications = []
+        prChecks = [:]
         hasLoaded = false
     }
 
@@ -231,6 +251,9 @@ final class AppStore {
         }
         sections = loaded
         await loadNotifications(using: api)
+        // Kick off CI hydration without awaiting it, so the list shows immediately and the
+        // check-run fetches fill in behind it.
+        hydrateChecks(for: loaded, using: api)
     }
 
     /// Best-effort fetch of the notification inbox. Deliberately separate from section
@@ -329,6 +352,59 @@ final class AppStore {
     private func removeItem(id: Int) {
         sections = sections.map { section in
             LoadedSection(id: section.id, title: section.title, items: section.items.filter { $0.id != id })
+        }
+    }
+
+    /// Best-effort CI hydration: for every PR in the loaded sections, fetch its detail (for
+    /// the head SHA) then its check runs, roll them up, and stash the result in `prChecks`.
+    /// Runs in a detached, non-blocking task with a capped `TaskGroup`; failures are swallowed
+    /// (decorative data — never sets `lastErrorMessage`). Stale runs are dropped via
+    /// `checksGeneration`.
+    private func hydrateChecks(for sections: [LoadedSection], using api: GitHubAPI) {
+        checksGeneration += 1
+        let generation = checksGeneration
+        // Distinct PRs only — the same PR can appear in several sections.
+        var seen = Set<Int>()
+        let prs = sections.flatMap(\.items).filter(\.isPullRequest).filter { seen.insert($0.id).inserted }
+        guard !prs.isEmpty else { return }
+
+        Task { [weak self] in
+            await withTaskGroup(of: (Int, PRChecks?).self) { group in
+                var next = 0
+                func schedule() {
+                    guard next < prs.count else { return }
+                    let pr = prs[next]
+                    next += 1
+                    group.addTask { await (pr.id, Self.fetchChecks(for: pr, using: api)) }
+                }
+                for _ in 0..<Self.checksConcurrency {
+                    schedule()
+                }
+                while let (id, checks) = await group.next() {
+                    if let self, self.checksGeneration == generation, let checks {
+                        self.prChecks[id] = checks
+                    }
+                    schedule()
+                }
+            }
+        }
+    }
+
+    /// Fetch and map one PR's check runs, or nil if the PR has no checks or anything fails.
+    /// `nonisolated` so it runs off the main actor inside the hydration task group.
+    private nonisolated static func fetchChecks(for item: SearchIssue, using api: GitHubAPI) async -> PRChecks? {
+        do {
+            let repo = item.repositorySlug
+            let detail = try await api.pullRequest(repo: repo, number: item.number)
+            let runs = try await api.checkRuns(repo: repo, ref: detail.head.sha)
+            guard let status = runs.ciRollup else { return nil }
+            let branch = String(detail.head.sha.prefix(7))
+            let models = runs.map { $0.checkRowModel(repo: repo, branch: branch) }
+            return PRChecks(status: status, checks: models)
+        } catch {
+            Log.network
+                .debug("ci skip #\(item.number, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            return nil
         }
     }
 
