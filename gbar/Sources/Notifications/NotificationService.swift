@@ -30,7 +30,10 @@ final class NotificationService: NSObject, DesktopNotifying {
     /// means no banners fire — the rest of the app is unaffected. Safe to call on every launch.
     func requestAuthorization() async {
         do {
-            _ = try await center.requestAuthorization(options: [.alert, .sound])
+            // Call on a fresh `.current()` (a disconnected region) rather than the main-actor
+            // stored `center`: awaiting a non-Sendable stored reference trips Swift 6.0's
+            // "sending 'self.center' risks data races" (Xcode 16.4); the local doesn't.
+            _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
         } catch {
             Log.notifications.error("authorization request failed: \(error.localizedDescription, privacy: .public)")
         }
