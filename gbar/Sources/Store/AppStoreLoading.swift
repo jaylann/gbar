@@ -25,8 +25,10 @@ extension AppStore {
             }
         }
         var notifications: [GitHubNotification] = []
+        var notificationsSucceeded = false
         do {
             notifications = try await api.notifications()
+            notificationsSucceeded = true
         } catch {
             classify(error, expired: &sessionExpired, message: &errorMessage, fallback: nil)
             logFailure("notifications", account: account, error: error)
@@ -35,6 +37,7 @@ extension AppStore {
             account: account,
             sections: sections,
             notifications: notifications,
+            notificationsSucceeded: notificationsSucceeded,
             sessionExpired: sessionExpired,
             errorMessage: errorMessage
         )

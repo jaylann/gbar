@@ -102,6 +102,53 @@ final class AppStore {
     @ObservationIgnored
     var deleteToken: @Sendable (_ key: String) -> Void = { KeychainStore.remove($0) }
 
+    // MARK: Desktop notifications
+
+    /// Posts native desktop banners. Injected by the app (`StatusItemController`) so the store
+    /// stays testable — tests substitute a spy. Nil in tests that don't exercise notifications.
+    @ObservationIgnored
+    var notifier: (any DesktopNotifying)?
+
+    /// Master switch for desktop notifications, plus per-category toggles. All default on;
+    /// persisted like `apiBaseURL`. Inline defaults let the test-only init skip them.
+    var notificationsEnabled = true {
+        didSet { UserDefaults.standard.set(notificationsEnabled, forKey: Self.notificationsEnabledKey) }
+    }
+
+    var notifyInbox = true {
+        didSet { UserDefaults.standard.set(notifyInbox, forKey: Self.notifyInboxKey) }
+    }
+
+    var notifySections = true {
+        didSet { UserDefaults.standard.set(notifySections, forKey: Self.notifySectionsKey) }
+    }
+
+    var notifyChecks = true {
+        didSet { UserDefaults.standard.set(notifyChecks, forKey: Self.notifyChecksKey) }
+    }
+
+    static let notificationsEnabledKey = "gbar.notificationsEnabled"
+    static let notifyInboxKey = "gbar.notifyInbox"
+    static let notifySectionsKey = "gbar.notifySections"
+    static let notifyChecksKey = "gbar.notifyChecks"
+
+    /// Notification baselines, keyed by a composite of the owning account so ids never collide
+    /// across hosts. See `AppStoreNotifications.swift` for the diff + seeding logic.
+    ///
+    /// - `seenSectionItemKeys`: `"<account.id>\n<query.id>\n<issue.id>"` for every successfully
+    ///   loaded section item. Query-scoped so a single failed section can be preserved
+    ///   independently of its siblings.
+    /// - `seededSectionKeys`: `"<account.id>\n<query.id>"` pairs whose first (silent) load has
+    ///   happened, so their next new item notifies rather than re-seeding.
+    /// - `lastUnreadInboxKeys`: `"<account.id>\n<notification.id>"` for the previous poll's unread
+    ///   threads; `seededInboxAccounts`: account ids whose inbox has been seeded.
+    /// - `lastCheckStatus`: last observed terminal CI status per `(account, PR)`.
+    var seenSectionItemKeys: Set<String> = []
+    var seededSectionKeys: Set<String> = []
+    var lastUnreadInboxKeys: Set<String> = []
+    var seededInboxAccounts: Set<Account.ID> = []
+    var lastCheckStatus: [PRCheckKey: CIStatus] = [:]
+
     /// User-editable menu sections. Seeded from `SearchQuery.defaults` on first launch;
     /// persisted as JSON so custom queries and ordering survive relaunches.
     var savedQueries: [SearchQuery.Section] {
@@ -203,6 +250,12 @@ final class AppStore {
         } else {
             savedQueries = SearchQuery.defaults
         }
+        // Notification toggles default on; absence of the key means first launch.
+        let defaults = UserDefaults.standard
+        notificationsEnabled = defaults.object(forKey: Self.notificationsEnabledKey) as? Bool ?? true
+        notifyInbox = defaults.object(forKey: Self.notifyInboxKey) as? Bool ?? true
+        notifySections = defaults.object(forKey: Self.notifySectionsKey) as? Bool ?? true
+        notifyChecks = defaults.object(forKey: Self.notifyChecksKey) as? Bool ?? true
         restorePersistedAccounts()
         startPolling()
     }
@@ -244,7 +297,11 @@ final class AppStore {
         self.makeAPI = makeAPI
         tokenForAccount = { _ in token }
     }
+    #endif
+}
 
+#if DEBUG
+extension AppStore {
     /// Test hook: await the current CI hydration wave (if any) to completion.
     func awaitChecksHydration() async {
         await checksTask?.value
@@ -261,8 +318,8 @@ final class AppStore {
         get { pendingLegacyToken }
         set { pendingLegacyToken = newValue }
     }
-    #endif
 }
+#endif
 
 // MARK: - Saved queries
 
@@ -314,6 +371,14 @@ extension AppStore {
                 loadsByAccount[load.account.id] = load
             }
         }
+
+        // Diff against the previous poll and fire banners for new section items / inbox threads
+        // before the merged data replaces the store's state. Both read `loadsByAccount` directly
+        // so they can tell a genuinely-empty result apart from a failed one (which must not
+        // advance/seed that account's baseline). CI-status banners fire later, at hydration
+        // completion (see `hydrateChecks`).
+        notifyNewSectionItems(loads: loadsByAccount, queries: queries)
+        notifyNewInboxItems(loads: loadsByAccount)
 
         sections = mergeSections(loadsByAccount, queries: queries)
         notifications = mergeNotifications(loadsByAccount)
@@ -445,6 +510,9 @@ extension AppStore {
         if accounts.isEmpty {
             resetSignedOutState()
         } else {
+            // Drop just this account's notification baselines so re-adding it re-seeds silently
+            // and the sets don't leak entries for a removed account.
+            pruneNotificationBaselines(accountID: id)
             startPolling()
         }
     }
@@ -477,6 +545,9 @@ extension AppStore {
         hasLoaded = false
         sessionExpired = false
         lastErrorMessage = nil
+        // Reset every notification baseline so the next sign-in re-seeds silently instead of
+        // firing a banner for every pre-existing item.
+        resetNotificationBaselines()
         // Drop any un-migrated legacy token too, so removing the last account can't leave
         // `isSignedIn` stuck true (with zero accounts) on a revoked/never-migrated credential.
         pendingLegacyToken = nil
@@ -551,9 +622,13 @@ extension AppStore {
         checksGeneration += 1
         let prs = distinctPRFetches(from: sections, apis: apis)
         // Prune entries for PRs no longer in the list so a dropped-out PR's stale CI dot can't
-        // linger (and `prChecks` can't grow unbounded).
+        // linger (and `prChecks` can't grow unbounded). Prune the notification baseline the same
+        // way so a PR that leaves every section doesn't retain a stale `lastCheckStatus` (bug #5).
+        // A PR still in the list but whose fetch fails keeps its key here (it's in `prs`), so its
+        // baseline survives — that's what protects bug #3.
         let live = Set(prs.map(\.key))
         prChecks = prChecks.filter { live.contains($0.key) }
+        lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
         guard !prs.isEmpty else {
             checksTask = nil
             return
@@ -580,7 +655,9 @@ extension AppStore {
     /// The capped-concurrency hydration wave. Stale runs (a superseded `generation`) drop their
     /// writes.
     private func checksWave(prs: [CheckFetch], generation: Int) -> Task<Void, Never> {
-        Task { [weak self] in
+        // Carry each PR alongside its key so the completion step can build a CI banner.
+        let issueByKey = Dictionary(uniqueKeysWithValues: prs.map { ($0.key, $0.issue) })
+        return Task { [weak self] in
             await withTaskGroup(of: (PRCheckKey, PRChecks?).self) { group in
                 var next = 0
                 func schedule() {
@@ -594,9 +671,18 @@ extension AppStore {
                 }
                 while let (key, checks) = await group.next() {
                     guard let self, self.checksGeneration == generation else { continue }
-                    // Write the fresh result, or clear a now-empty/failed entry so a stale dot
-                    // (e.g. green after CI started failing) doesn't survive.
-                    self.prChecks[key] = checks
+                    if let checks {
+                        // A real observation: diff for a pass/fail banner, then store the result.
+                        if let issue = issueByKey[key] {
+                            self.notifyCheckStatusChange(key: key, pr: issue, newStatus: checks.status)
+                        }
+                        self.prChecks[key] = checks
+                    } else {
+                        // No checks or a failed fetch: clear the decorative dot so a stale green
+                        // can't survive, but leave `lastCheckStatus` untouched — wiping it would
+                        // let a transient error swallow the next real pass→fail transition (bug #3).
+                        self.prChecks[key] = nil
+                    }
                     schedule()
                 }
             }

@@ -11,6 +11,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
     /// `Settings` scene share one instance; `AppStore.init` self-starts polling.
     let store = AppStore()
 
+    /// Owns the desktop-notification service and hands it to the store as its `notifier`, so the
+    /// store can post banners without knowing about `UNUserNotificationCenter`. Both are `@MainActor`.
+    private let notificationService = NotificationService()
+
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     /// When the transient popover last auto-closed, used to swallow the reopen race (see below).
@@ -19,6 +23,12 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
     private static let symbolName = "chevron.left.forwardslash.chevron.right"
 
     func applicationDidFinishLaunching(_: Notification) {
+        // Wire up desktop notifications and request authorization at launch (not on first
+        // menu-open), so banners can fire from a background poll before the user ever opens the
+        // popover and the OS permission prompt appears at start.
+        store.notifier = notificationService
+        Task { await notificationService.requestAuthorization() }
+
         let content = NSHostingController(
             rootView: MenuContentView(store: store) { [weak self] in self?.openSettings() }
         )
