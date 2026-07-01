@@ -64,6 +64,24 @@ struct AccountLoad {
     var errorMessage: String?
 }
 
+/// State of an in-place re-authentication (device flow) kicked off from the 401 prompt for a
+/// single expired account.
+///
+/// Note: GitHub device-flow tokens carry **no** refresh token and PATs are static, so there is
+/// nothing to silently refresh — a 401 recovery is always a full re-auth. This flow preserves the
+/// account's identity by writing the fresh token back into that account's Keychain slot (keyed by
+/// its `login`), so aggregation, filters, and baselines all carry over unchanged.
+enum ReauthStatus: Equatable {
+    /// Not reconnecting.
+    case idle
+    /// Requesting a device code from GitHub.
+    case starting
+    /// Waiting for the user to enter `code` in the browser and approve.
+    case awaitingAuthorization(code: String)
+    /// The reconnect attempt failed; carries a friendly message.
+    case failed(String)
+}
+
 /// How often the store polls GitHub in the background. Raw value is the interval in seconds;
 /// `.off` (0) disables auto-refresh entirely.
 enum PollInterval: TimeInterval, CaseIterable, Identifiable {
