@@ -48,12 +48,23 @@ struct PRChecks {
     let checks: [CheckRow.Model]
 }
 
+/// The two repo-level merge signals resolved together from the one `GET /repos/{repo}` call
+/// the hydration wave already makes: whether the viewer can merge at all (`canMerge`) and which
+/// strategies the repo enables (`allowedMethods`), so the gate and the inline picker both come
+/// from a single cache entry.
+struct RepoMergeInfo {
+    let canMerge: Bool
+    let allowedMethods: [MergeMethod]
+}
+
 /// Whether the hover quick-actions apply to a PR, derived during hydration (see
 /// `AppStore.prGates`). `alreadyApproved` hides Approve; `mergeable` is the full
-/// "GitHub would let me merge this" verdict (state + write access) that gates Merge.
+/// "GitHub would let me merge this" verdict (state + write access) that gates Merge;
+/// `allowedMergeMethods` is the repo's enabled strategies for the inline merge picker.
 struct PRGate {
     let alreadyApproved: Bool
     let mergeable: Bool
+    let allowedMergeMethods: [MergeMethod]
 }
 
 /// One PR's hydrated state — CI checks and the action gate — produced together from the

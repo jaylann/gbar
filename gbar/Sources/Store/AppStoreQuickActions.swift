@@ -3,14 +3,17 @@ import Foundation
 // MARK: - Quick actions
 
 extension AppStore {
-    /// Approve a pull request via its own account's client. Approval doesn't change which
-    /// lists the PR belongs to, so on success we just clear a stale error.
-    func approve(_ item: AccountItem) async {
+    /// Approve a pull request via its own account's client, optionally attaching a review
+    /// message. Approval doesn't change which lists the PR belongs to, so on success we just
+    /// clear a stale error. An empty/whitespace-only message is sent as no body (plain approval).
+    func approve(_ item: AccountItem, message: String? = nil) async {
         guard let token = tokenForAccount(item.account) else { return }
         let api = makeAPI(item.account.apiBaseURL, token)
         let issue = item.issue
+        let trimmed = message?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let body = (trimmed?.isEmpty ?? true) ? nil : trimmed
         do {
-            try await api.approvePullRequest(repo: issue.repositorySlug, number: issue.number)
+            try await api.approvePullRequest(repo: issue.repositorySlug, number: issue.number, body: body)
             lastErrorMessage = nil
         } catch {
             handleActionError(

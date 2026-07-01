@@ -128,8 +128,9 @@ struct PullRequestReview: Decodable {
     }
 }
 
-/// Repository detail (`GET /repos/{owner}/{repo}`) — we only need the viewer's
-/// `permissions` to decide whether merging is even possible.
+/// Repository detail (`GET /repos/{owner}/{repo}`) — we need the viewer's `permissions` to
+/// decide whether merging is even possible, plus the repo's enabled merge strategies to build
+/// the inline merge-method picker.
 struct RepositoryInfo: Decodable {
     struct Permissions: Decodable {
         let push: Bool
@@ -138,6 +139,27 @@ struct RepositoryInfo: Decodable {
     }
 
     let permissions: Permissions?
+    let allowMergeCommit: Bool?
+    let allowSquashMerge: Bool?
+    let allowRebaseMerge: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case permissions
+        case allowMergeCommit = "allow_merge_commit"
+        case allowSquashMerge = "allow_squash_merge"
+        case allowRebaseMerge = "allow_rebase_merge"
+    }
+
+    /// The merge strategies this repo permits, in GitHub's canonical order. A `nil` flag means
+    /// GitHub omitted it (e.g. a token without repo-admin scope) — default it to available so a
+    /// method is never wrongly hidden.
+    var allowedMergeMethods: [MergeMethod] {
+        var methods: [MergeMethod] = []
+        if allowMergeCommit ?? true { methods.append(.merge) }
+        if allowSquashMerge ?? true { methods.append(.squash) }
+        if allowRebaseMerge ?? true { methods.append(.rebase) }
+        return methods
+    }
 }
 
 /// One check run for a commit (`GET /repos/{owner}/{repo}/commits/{ref}/check-runs`).

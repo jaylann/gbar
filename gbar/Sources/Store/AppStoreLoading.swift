@@ -70,11 +70,12 @@ extension AppStore {
     /// Hydrate one PR: fetch its detail (once), then best-effort its check runs and reviews,
     /// and derive the action gate. Never throws — a failed detail fetch yields an empty
     /// `PRState` so the row stays optimistic (buttons show as they did before hydration).
-    /// `canMerge` is the viewer's push access to the repo, or nil when unknown.
+    /// `mergeInfo` is the viewer's repo merge signals (push access + allowed strategies), or
+    /// nil when not yet hydrated.
     nonisolated static func fetchPRState(
         for item: SearchIssue,
         login: String,
-        canMerge: Bool?,
+        mergeInfo: RepoMergeInfo?,
         using api: GitHubAPI
     ) async
     -> PRState {
@@ -93,7 +94,7 @@ extension AppStore {
         } else {
             await (try? api.reviews(repo: repo, number: item.number)) ?? []
         }
-        let gate = deriveGate(detail: detail, reviews: reviews, login: login, canMerge: canMerge)
+        let gate = deriveGate(detail: detail, reviews: reviews, login: login, mergeInfo: mergeInfo)
         return PRState(checks: checks, gate: gate)
     }
 
@@ -123,13 +124,15 @@ extension AppStore {
     /// - `mergeable`: GitHub would show a live Merge button (open, non-draft, a clean-ish
     ///   `mergeable_state`) *and* the viewer has push access. Stays optimistic where the answer
     ///   is genuinely unknown — `nil`/`"unknown"` mergeable_state (GitHub still computing after a
-    ///   push) or `nil` push access — so a valid Merge button never flickers away; only the
+    ///   push) or `nil` merge info — so a valid Merge button never flickers away; only the
     ///   definitively-bad states (blocked/dirty/behind/draft/closed) hide it.
+    /// - `allowedMergeMethods`: the repo's enabled strategies, or all three until `mergeInfo`
+    ///   hydrates (optimistic — the inline picker never shows fewer than reality).
     nonisolated static func deriveGate(
         detail: PullRequestDetail,
         reviews: [PullRequestReview],
         login: String,
-        canMerge: Bool?
+        mergeInfo: RepoMergeInfo?
     )
     -> PRGate {
         let me = login.lowercased()
@@ -145,8 +148,12 @@ extension AppStore {
         case let state?: ["clean", "unstable", "has_hooks"].contains(state)
         }
         let stateOK = detail.state == "open" && detail.draft != true && mergeableStateOK
-        let mergeable = stateOK && (canMerge ?? true)
+        let mergeable = stateOK && (mergeInfo?.canMerge ?? true)
 
-        return PRGate(alreadyApproved: alreadyApproved, mergeable: mergeable)
+        return PRGate(
+            alreadyApproved: alreadyApproved,
+            mergeable: mergeable,
+            allowedMergeMethods: mergeInfo?.allowedMethods ?? MergeMethod.allCases
+        )
     }
 }
