@@ -23,22 +23,18 @@ bootstrap:
     git config core.hooksPath .githooks
     echo "✓ core.hooksPath → .githooks"
     echo "  commit-msg hook now validates Conventional Commits."
-    # Materialize the gitignored Tuist xcconfigs from their tracked templates so a
-    # fresh clone can `just gen`/`just build` without a "Configuration file not
-    # found / Fatal linting" error. These hold PLACEHOLDER values — real per-env
-    # keys (a baked GH OAuth client ID for the paid build) come from CI env.
-    for cfg in Debug Release; do
-        target="Tuist/Config/${cfg}.xcconfig"
-        template="${target}.template"
-        if [[ ! -f "$target" && -f "$template" ]]; then
-            cp "$template" "$target"
-            echo "✓ materialized $target from template (PLACEHOLDER values — fill in real keys)"
-        fi
-    done
+    # Materialize + backfill the gitignored Tuist xcconfigs so a fresh clone can
+    # `just gen`/`just build` without a "Configuration file not found / Fatal linting"
+    # error. These hold PLACEHOLDER values — real per-env keys (a baked GH OAuth client
+    # ID for the paid build) come from CI env.
+    just _xcconfig
+    echo "✓ materialized Tuist/Config/*.xcconfig from templates (fill in real keys)"
 
 # ─── Project generation ─────────────────────────────────────────────
 
-# Materialize the gitignored Tuist xcconfigs from their tracked templates (idempotent).
+# Materialize the gitignored Tuist xcconfigs from their tracked templates (idempotent),
+# then backfill any missing GBAR_* signing keys on pre-existing xcconfigs so Project.swift's
+# $(GBAR_*) references always resolve — a missing key resolves to empty and breaks signing.
 # Kept separate so `gen` is self-sufficient on a fresh clone / CI checkout.
 _xcconfig:
     #!/usr/bin/env bash
@@ -49,6 +45,14 @@ _xcconfig:
         if [[ ! -f "$target" && -f "$template" ]]; then
             cp "$template" "$target"
         fi
+        [[ -f "$target" ]] || continue
+        # Ad-hoc/teamless defaults; edit these locally to sign with a real team (which
+        # enables the data-protection keychain and stops the recurring keychain prompt).
+        add_key() { grep -qE "^[[:space:]]*$1[[:space:]]*=" "$target" || printf '%s = %s\n' "$1" "$2" >> "$target"; }
+        add_key GBAR_CODE_SIGN_STYLE Manual
+        add_key GBAR_CODE_SIGN_IDENTITY -
+        add_key GBAR_DEVELOPMENT_TEAM ""
+        add_key GBAR_ENTITLEMENTS gbar/gbar.entitlements
     done
 
 # Install Tuist deps and regenerate the Xcode project
@@ -78,16 +82,9 @@ clean:
 _ensure:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Self-heal a fresh clone/worktree that skipped `just bootstrap` by materializing
-    # the gitignored xcconfigs from templates before Tuist reads them.
-    for cfg in Debug Release; do
-        target="Tuist/Config/${cfg}.xcconfig"
-        template="${target}.template"
-        if [[ ! -f "$target" && -f "$template" ]]; then
-            cp "$template" "$target"
-            echo "✓ materialized $target from template (PLACEHOLDER values)"
-        fi
-    done
+    # Self-heal a fresh clone/worktree that skipped `just bootstrap` by materializing +
+    # backfilling the gitignored xcconfigs from templates before Tuist reads them.
+    just _xcconfig
     if [[ ! -d "{{project}}.xcworkspace" ]]; then
         tuist install
         tuist generate --no-open

@@ -2,8 +2,17 @@ import Foundation
 import Security
 
 /// Minimal Keychain wrapper for a single secret string per key (generic password).
-/// Sandboxed macOS apps get their own keychain access group keyed to the app identity,
-/// so no `keychain-access-groups` entitlement is needed for the app's own items.
+///
+/// Prefers the **data-protection keychain** (`kSecUseDataProtectionKeychain`), whose access
+/// is governed by the app's access-group entitlement rather than a per-item ACL. A
+/// team-signed build therefore never shows the "gbar wants to use your confidential
+/// information" prompt, and the grant survives rebuilds — unlike the file-based keychain,
+/// whose ACL is bound to the app's code-signing Designated Requirement and re-prompts
+/// whenever the signature changes (e.g. every ad-hoc rebuild).
+///
+/// A teamless ad-hoc build has no access group, so the data-protection keychain returns
+/// `errSecMissingEntitlement`; we transparently fall back to the file-based keychain there.
+/// That build still gets the ACL prompt, which is unavoidable without a signing team.
 enum KeychainStore {
     enum KeychainError: Error {
         case unexpectedStatus(OSStatus)
@@ -13,40 +22,51 @@ enum KeychainStore {
 
     static func set(_ value: String, for key: String) throws {
         let data = Data(value.utf8)
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-        ]
-        SecItemDelete(query as CFDictionary)
-
-        var attributes = query
-        attributes[kSecValueData as String] = data
-        attributes[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-        let status = SecItemAdd(attributes as CFDictionary, nil)
+        let status = withKeychain { useDataProtection in
+            var query = baseQuery(for: key, useDataProtection: useDataProtection)
+            SecItemDelete(query as CFDictionary)
+            query[kSecValueData as String] = data
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            return SecItemAdd(query as CFDictionary, nil)
+        }
         guard status == errSecSuccess else { throw KeychainError.unexpectedStatus(status) }
     }
 
     static func get(_ key: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = withKeychain { useDataProtection in
+            var query = baseQuery(for: key, useDataProtection: useDataProtection)
+            query[kSecReturnData as String] = true
+            query[kSecMatchLimit as String] = kSecMatchLimitOne
+            return SecItemCopyMatching(query as CFDictionary, &item)
+        }
         guard status == errSecSuccess, let data = item as? Data else { return nil }
         return String(bytes: data, encoding: .utf8)
     }
 
     static func remove(_ key: String) {
-        let query: [String: Any] = [
+        _ = withKeychain { useDataProtection in
+            SecItemDelete(baseQuery(for: key, useDataProtection: useDataProtection) as CFDictionary)
+        }
+    }
+
+    // MARK: - Helpers
+
+    private static func baseQuery(for key: String, useDataProtection: Bool) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
+            kSecUseDataProtectionKeychain as String: useDataProtection,
         ]
-        SecItemDelete(query as CFDictionary)
+    }
+
+    /// Runs `op` against the data-protection keychain first; if the build carries no
+    /// access-group entitlement (teamless ad-hoc → `errSecMissingEntitlement`), retries the
+    /// same op against the file-based keychain so self-host builds keep working.
+    private static func withKeychain(_ op: (_ useDataProtection: Bool) -> OSStatus) -> OSStatus {
+        let status = op(true)
+        guard status == errSecMissingEntitlement else { return status }
+        return op(false)
     }
 }

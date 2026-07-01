@@ -19,11 +19,29 @@ let baseSettings: SettingsDictionary = [
     "MACOSX_DEPLOYMENT_TARGET": "14.0",
     "ENABLE_USER_SCRIPT_SANDBOXING": "YES",
     "GENERATE_INFOPLIST_FILE": "YES",
-    // Ad-hoc signing so a fresh clone can `just build` and run the sandboxed app
-    // locally without an Apple Developer team. For notarized distribution, override
-    // with Developer ID signing (CODE_SIGN_STYLE = Automatic + DEVELOPMENT_TEAM).
-    "CODE_SIGN_STYLE": "Manual",
-    "CODE_SIGN_IDENTITY": "-",
+]
+
+/// Signing is xcconfig-driven so the committed default stays ad-hoc/teamless (a fresh clone
+/// can `just build` the sandboxed app with no Apple Developer team), while a local or release
+/// xcconfig can supply a real DEVELOPMENT_TEAM + Automatic signing. A team-signed build
+/// carries an access-group entitlement, which lets KeychainStore use the data-protection
+/// keychain (no recurring keychain ACL prompt on rebuild). Defaults live in the Tuist/Config
+/// xcconfig templates.
+///
+/// These MUST live on the app target, not project `base`: Tuist injects a target-level
+/// `CODE_SIGN_IDENTITY = "-"` that outranks any project-level value. We also set the
+/// SDK-conditional key because macOS ships a higher-precedence
+/// `CODE_SIGN_IDENTITY[sdk=macosx*]` default (resolves to "-") that shadows the plain key.
+let signingSettings: SettingsDictionary = [
+    "CODE_SIGN_STYLE": "$(GBAR_CODE_SIGN_STYLE)",
+    "CODE_SIGN_IDENTITY": "$(GBAR_CODE_SIGN_IDENTITY)",
+    "CODE_SIGN_IDENTITY[sdk=macosx*]": "$(GBAR_CODE_SIGN_IDENTITY)",
+    "DEVELOPMENT_TEAM": "$(GBAR_DEVELOPMENT_TEAM)",
+    // Teamless/ad-hoc → gbar.entitlements (no keychain group, no profile needed). A team
+    // build → gbar-signed.entitlements (adds keychain-access-groups → data-protection
+    // keychain, no prompt). Requiring the group on an ad-hoc build would fail with
+    // "requires a provisioning profile", so it must be swappable per environment.
+    "CODE_SIGN_ENTITLEMENTS": "$(GBAR_ENTITLEMENTS)",
 ]
 
 let appInfoPlist: [String: Plist.Value] = [
@@ -62,8 +80,8 @@ let project = Project(
             infoPlist: .extendingDefault(with: appInfoPlist),
             sources: ["gbar/Sources/**"],
             resources: ["gbar/Resources/**"],
-            entitlements: .file(path: "gbar/gbar.entitlements"),
-            dependencies: []
+            dependencies: [],
+            settings: .settings(base: signingSettings)
         ),
         .target(
             name: "gbarTests",

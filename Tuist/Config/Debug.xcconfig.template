@@ -6,5 +6,17 @@
 // GH_OAUTH_CLIENT_ID: leave blank for a self-host build (the app prompts for a client
 // ID / PAT at runtime). The paid/hosted build ships with the licensor's client ID.
 // GH_API_BASE_URL: default GitHub API host; override for GitHub Enterprise.
+//
+// GBAR_CODE_SIGN_*/GBAR_DEVELOPMENT_TEAM/GBAR_ENTITLEMENTS: default to ad-hoc/teamless so a
+// fresh clone builds with no Apple team. To get the data-protection keychain (no recurring
+// keychain prompt), sign with a real team locally — set all four, e.g.:
+//   GBAR_CODE_SIGN_STYLE = Automatic
+//   GBAR_CODE_SIGN_IDENTITY = Apple Development
+//   GBAR_DEVELOPMENT_TEAM = <your 10-char Team ID>
+//   GBAR_ENTITLEMENTS = gbar/gbar-signed.entitlements
 GH_OAUTH_CLIENT_ID =
 GH_API_BASE_URL = https:/$()/api.github.com
+GBAR_CODE_SIGN_STYLE = Manual
+GBAR_CODE_SIGN_IDENTITY = -
+GBAR_DEVELOPMENT_TEAM =
+GBAR_ENTITLEMENTS = gbar/gbar.entitlements
