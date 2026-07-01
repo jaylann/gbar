@@ -477,6 +477,9 @@ extension AppStore {
         hasLoaded = false
         sessionExpired = false
         lastErrorMessage = nil
+        // Drop any un-migrated legacy token too, so removing the last account can't leave
+        // `isSignedIn` stuck true (with zero accounts) on a revoked/never-migrated credential.
+        pendingLegacyToken = nil
     }
 
     private func persistAccounts() {

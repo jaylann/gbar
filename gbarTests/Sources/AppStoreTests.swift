@@ -427,6 +427,25 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(store.sections.flatMap(\.items).allSatisfy { $0.account.login == "alice" })
     }
 
+    func testRemovingLastAccountClearsPendingLegacyToken() throws {
+        // A stale legacy token (e.g. migration never completed because it was revoked) plus one
+        // real account. Removing the real account must not leave `isSignedIn` stuck true.
+        let url = try makeURL()
+        let alice = Account(login: "alice", avatarURL: nil, kind: .oauth, apiBaseURL: url)
+        let fake = FakeGitHubAPI()
+        let store = AppStore(apiBaseURL: url, accounts: [alice], makeAPI: { [fake] _, _ in fake })
+        let box = TokenBox()
+        store.deleteToken = { box.remove($0) }
+        store.pendingLegacyTokenForTests = "legacy-token"
+        XCTAssertTrue(store.isSignedIn)
+
+        store.removeAccount(id: "alice")
+
+        XCTAssertTrue(store.accounts.isEmpty)
+        XCTAssertNil(store.pendingLegacyTokenForTests)
+        XCTAssertFalse(store.isSignedIn)
+    }
+
     // MARK: - Legacy migration
 
     func testLegacyTokenMigratesToSingleAccount() async throws {
