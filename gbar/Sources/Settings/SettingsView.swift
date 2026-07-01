@@ -19,13 +19,10 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 460, height: 420)
-        // A window spawned from an `LSUIElement` agent app becomes key (Tab works) but
-        // not *main*, so mouse clicks don't move first responder into a text field.
-        // Grab the real window and force it key+main so click-to-focus works.
+        // Owns the whole agent-app activation lifecycle for this window: promote to a
+        // regular app + make the window key+main so its text fields accept clicks and
+        // typing, then demote back to a no-Dock-icon agent when it actually closes.
         .background(WindowActivator())
-        // Drop back to an agent app (no Dock icon) once Settings closes; it was
-        // promoted to `.regular` on open so its text fields could take keyboard focus.
-        .onDisappear { NSApp.setActivationPolicy(.accessory) }
     }
 
     private var accountSection: some View {
@@ -89,20 +86,46 @@ struct SettingsView: View {
     }
 }
 
-/// Captures the hosting `NSWindow` once the view is in the hierarchy and forces it
-/// key+main, plus activates the app. Needed because a window opened from an
-/// `LSUIElement` agent app doesn't reliably become main, which blocks mouse
-/// click-to-focus on text fields.
+/// Makes a window opened from an `LSUIElement` agent app usable. Such a window can
+/// become key (Tab works) but not *main*, so mouse clicks don't move first responder
+/// into a text field. This captures the real hosting `NSWindow`, promotes the app to
+/// `.regular` and forces the window key+main so click-to-focus works, then demotes back
+/// to `.accessory` (no Dock icon) when that window actually closes — a concrete
+/// `willClose` signal rather than a possibly-missed SwiftUI `onDisappear`.
 private struct WindowActivator: NSViewRepresentable {
-    func makeNSView(context _: Context) -> NSView {
-        let view = NSView()
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.regular)
-            NSApp.activate(ignoringOtherApps: true)
-            view.window?.makeKeyAndOrderFront(nil)
-        }
-        return view
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
     }
 
-    func updateNSView(_: NSView, context _: Context) {}
+    func makeNSView(context _: Context) -> NSView {
+        NSView()
+    }
+
+    /// The hosting window isn't attached in `makeNSView`, but it is by the time SwiftUI
+    /// runs an update pass — so grab it here (idempotent via the coordinator's guard).
+    func updateNSView(_ nsView: NSView, context: Context) {
+        context.coordinator.activateIfNeeded(nsView)
+    }
+
+    @MainActor
+    final class Coordinator {
+        private var didActivate = false
+
+        func activateIfNeeded(_ view: NSView) {
+            guard !didActivate, let window = view.window else { return }
+            didActivate = true
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            // Scoped to this window's close; the token needs no cleanup because the
+            // observation dies with the window it's bound to.
+            NotificationCenter.default.addObserver(
+                forName: NSWindow.willCloseNotification,
+                object: window,
+                queue: .main
+            ) { _ in
+                MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
+            }
+        }
+    }
 }

@@ -18,10 +18,12 @@ enum GitHubState {
         if issue.isPullRequest {
             if issue.pullRequest?.mergedAt != nil {
                 self = .merged
+            } else if issue.state == "closed" {
+                self = .closed
             } else if issue.draft == true {
                 self = .draft
             } else {
-                self = issue.state == "closed" ? .closed : .open
+                self = .open
             }
         } else {
             self = issue.state == "closed" ? .done : .open

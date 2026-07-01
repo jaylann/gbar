@@ -42,14 +42,12 @@ struct MenuContentView: View {
         .padding(.vertical, Theme.Spacing.sm)
     }
 
-    /// Opening a window from an `LSUIElement` agent app is a two-part problem: the app
-    /// runs with `.accessory` activation policy, so its windows show but can't become
-    /// key — text fields silently swallow no keystrokes. Promote to `.regular` and
-    /// activate so the Settings window can take keyboard focus; `SettingsView` drops
-    /// back to `.accessory` (no Dock icon) when it closes.
+    /// Just open the Settings scene. The activation dance an `LSUIElement` agent app
+    /// needs to make that window take keyboard focus — and the demotion back to a
+    /// no-Dock-icon agent on close — is owned entirely by `WindowActivator` inside
+    /// `SettingsView`, so it applies however Settings is opened (this button, the
+    /// sign-in prompt, or the system ⌘, shortcut).
     private func openSettingsWindow() {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
         openSettings()
     }
 
@@ -57,18 +55,39 @@ struct MenuContentView: View {
     private var content: some View {
         if !store.isSignedIn {
             SignInPromptView { openSettingsWindow() }
+        } else if !isEmpty {
+            // Always render loaded data. A per-section failure sets `lastErrorMessage`
+            // while still populating the sections that succeeded, so a partial error
+            // must not blank the list — surface it as a quiet banner above it instead.
+            VStack(alignment: .leading, spacing: 0) {
+                if let message = store.lastErrorMessage {
+                    errorBanner(message)
+                }
+                sectionsList
+            }
+        } else if !store.hasLoaded {
+            LoadingView().padding(.vertical, Theme.Spacing.sm)
         } else if store.sessionExpired {
             ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
         } else if let message = store.lastErrorMessage {
             ErrorStateView(kind: .generic) { Task { await store.refresh() } }
                 .help(message)
-        } else if store.isRefreshing, isEmpty {
-            LoadingView().padding(.vertical, Theme.Spacing.sm)
-        } else if isEmpty {
-            EmptyStateView(intent: .caughtUp, title: "You're all caught up", message: "Nothing needs you right now.")
         } else {
-            sectionsList
+            EmptyStateView(intent: .caughtUp, title: "You're all caught up", message: "Nothing needs you right now.")
         }
+    }
+
+    private func errorBanner(_ message: String) -> some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(Theme.Palette.pending)
+            Text(message)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .font(Theme.Typography.caption)
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, Theme.Spacing.xs)
     }
 
     private var sectionsList: some View {

@@ -2,7 +2,7 @@ import SwiftUI
 
 /// The root frame for the menu-bar popover. Fixes the width to a menu-bar-appropriate
 /// 380pt and lets height grow with content up to a cap, past which the caller scrolls
-/// internally (a menu-bar panel shouldn't grow into a mis-placed window). Sets the
+/// internally (a menu-bar panel shouldn't grow into a misplaced window). Sets the
 /// default row density for everything inside.
 struct PopoverContainer<Content: View>: View {
     var width: CGFloat = 380
