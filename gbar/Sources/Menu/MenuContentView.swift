@@ -81,10 +81,9 @@ struct MenuContentView: View {
             // tall; the sign-in prompt sizes to its content (`maxHeight` on the container caps both).
             .frame(minHeight: store.isSignedIn ? 560 : nil)
         }
-        // Skip if the background poll loop is already refreshing, so opening the menu doesn't
-        // overlap an in-flight fetch (see AppStore.startPolling). Note(#10): refresh() itself
-        // has no reentrancy guard, so this is a mitigation, not a hard lock.
-        .task { if store.isSignedIn, !store.isRefreshing { await store.refresh() } }
+        // `refresh()` is single-flight, so opening the menu while the background poll loop is
+        // mid-fetch coalesces onto that run instead of overlapping it (see AppStore.refresh, #10).
+        .task { if store.isSignedIn { await store.refresh() } }
     }
 
     // MARK: Top bar

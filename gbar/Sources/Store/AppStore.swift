@@ -90,6 +90,12 @@ final class AppStore {
     /// The single in-flight poll loop, if any. `@MainActor`-isolated like the rest of the store.
     var pollTask: Task<Void, Never>?
 
+    /// The single in-flight refresh, if any. Makes `refresh()` single-flight: concurrent callers
+    /// (poll loop, menu open, manual button, reconnect, account-add) coalesce onto this one run
+    /// instead of starting overlapping refreshes whose @MainActor-interleaved awaits would clobber
+    /// each other's partial state (`sections`, notification baselines, CI generation). See #10.
+    var refreshTask: Task<Void, Never>?
+
     /// Bumped on every hydration wave (and on account add/remove/sign-out) so a slow, in-flight
     /// CI hydration from a previous refresh can detect it's stale and drop its writes instead of
     /// clobbering fresher results — or repopulating `prChecks` after sign-out.
@@ -369,6 +375,22 @@ extension AppStore {
     /// concurrently in a `TaskGroup`; the merged data is kept whole and the account filter is
     /// applied only in the view-facing projections, so switching accounts needs no refetch.
     func refresh() async {
+        // Single-flight: if a refresh is already running, await it rather than starting a second
+        // one that would interleave at every await point and overwrite the first's partial state.
+        if let refreshTask {
+            await refreshTask.value
+            return
+        }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.performRefresh()
+        }
+        refreshTask = task
+        await task.value
+        refreshTask = nil
+    }
+
+    private func performRefresh() async {
         await migrateLegacyCredentialIfNeeded()
         guard !accounts.isEmpty else { return }
         isRefreshing = true
@@ -622,7 +644,9 @@ extension AppStore {
         pollTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self, self.isSignedIn, self.pollInterval > 0 else { return }
-                if !self.isRefreshing { await self.refresh() }
+                // `refresh()` is single-flight, so a menu-triggered or manual refresh already in
+                // flight coalesces here rather than racing this poll tick. See #10.
+                await self.refresh()
                 let seconds = self.pollInterval
                 do {
                     try await Task.sleep(for: .seconds(seconds))
