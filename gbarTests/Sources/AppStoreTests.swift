@@ -71,4 +71,50 @@ final class AppStoreTests: XCTestCase {
         // Only review-requested (3) + assigned-prs (2) count toward the badge.
         XCTAssertEqual(store.badgeCount, 5)
     }
+
+    func testRefreshLoadsNotifications() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [
+            .stub(id: "1", title: "First"),
+            .stub(id: "2", title: "Second"),
+        ]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        XCTAssertEqual(store.notifications.map(\.id), ["1", "2"])
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
+    func testMarkReadCallsAPIAndDropsItem() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        let target = try XCTUnwrap(store.notifications.first { $0.id == "1" })
+        await store.markRead(target)
+
+        XCTAssertEqual(fake.recorder.markedThreadIDs, ["1"])
+        XCTAssertEqual(store.notifications.map(\.id), ["2"])
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
+    func testMarkReadFailureSetsErrorAndKeepsItem() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1")]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        // Flip the store's live API to one that always fails, then attempt the mark-read.
+        struct Boom: Error {}
+        let failing = FakeGitHubAPI(error: Boom())
+        store.makeAPI = { _, _ in failing }
+
+        let target = try XCTUnwrap(store.notifications.first)
+        await store.markRead(target)
+
+        XCTAssertEqual(store.notifications.map(\.id), ["1"])
+        XCTAssertNotNil(store.lastErrorMessage)
+    }
 }

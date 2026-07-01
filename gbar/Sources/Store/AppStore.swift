@@ -40,6 +40,9 @@ enum PollInterval: TimeInterval, CaseIterable, Identifiable {
 final class AppStore {
     private(set) var credential: Credential?
     private(set) var sections: [LoadedSection] = []
+    /// The signed-in user's notification inbox (`GET /notifications`). Loaded best-effort
+    /// alongside sections so a notifications failure never blanks the PR/issue lists.
+    private(set) var notifications: [GitHubNotification] = []
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
@@ -172,6 +175,7 @@ final class AppStore {
         KeychainStore.remove(Credential.keychainKey)
         credential = nil
         sections = []
+        notifications = []
         hasLoaded = false
     }
 
@@ -226,6 +230,38 @@ final class AppStore {
             }
         }
         sections = loaded
+        await loadNotifications(using: api)
+    }
+
+    /// Best-effort fetch of the notification inbox. Deliberately separate from section
+    /// loading: on failure it surfaces an error (like a partial section failure does) but
+    /// leaves `sections` intact, so a flaky `/notifications` call never blanks the PR list.
+    private func loadNotifications(using api: GitHubAPI) async {
+        do {
+            notifications = try await api.notifications()
+        } catch {
+            if case .http(401) = error as? GitHubClient.ClientError {
+                sessionExpired = true
+                lastErrorMessage = "Session expired — reconnect in Settings."
+            } else {
+                lastErrorMessage = "Failed to load notifications."
+            }
+            Log.network.error("notifications fetch failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Mark a notification thread read on the server, then optimistically drop it from the
+    /// local inbox. On failure the item stays put and the error surfaces via `lastErrorMessage`.
+    func markRead(_ notification: GitHubNotification) async {
+        guard let credential else { return }
+        let api = makeAPI(apiBaseURL, credential.token)
+        do {
+            try await api.markNotificationRead(threadID: notification.id)
+            notifications.removeAll { $0.id == notification.id }
+        } catch {
+            lastErrorMessage = "Couldn't mark notification as read."
+            Log.network.error("mark notification read failed: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     /// Fetch one section, returning it on success or `nil` on failure while performing the

@@ -1,16 +1,36 @@
 import Foundation
 @testable import gbar
 
+/// Records calls made to the fake, so tests can assert on side effects the value-type fake
+/// can't capture in a non-`mutating` method. `@unchecked Sendable` via a lock.
+final class CallRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _markedThreadIDs: [String] = []
+
+    /// Thread IDs passed to `markNotificationRead`, in call order.
+    var markedThreadIDs: [String] {
+        lock.withLock { _markedThreadIDs }
+    }
+
+    func recordMarkRead(_ threadID: String) {
+        lock.withLock { _markedThreadIDs.append(threadID) }
+    }
+}
+
 /// A test double for `GitHubAPI`. Returns stubbed results keyed by query (falling back to
-/// `defaultResult`), or throws an injected error. `Sendable`-clean: all stored state is
-/// immutable value types.
+/// `defaultResult`), or throws an injected error. Value-type stubs stay `Sendable`-clean;
+/// mutations are captured through the shared `CallRecorder` reference.
 struct FakeGitHubAPI: GitHubAPI {
     /// Results keyed by exact query string.
     var resultsByQuery: [String: [SearchIssue]] = [:]
     /// Result returned when a query has no explicit stub.
     var defaultResult: [SearchIssue] = []
+    /// Result returned from `notifications()`.
+    var notificationsResult: [GitHubNotification] = []
     /// When set, every call throws this error instead of returning results.
     var error: Error?
+    /// Captures side-effecting calls (e.g. mark-as-read) for assertions.
+    var recorder = CallRecorder()
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
         if let error {
@@ -35,12 +55,18 @@ struct FakeGitHubAPI: GitHubAPI {
         throw Unstubbed.notImplemented
     }
 
-    func markNotificationRead(threadID _: String) async throws {
-        throw Unstubbed.notImplemented
+    func markNotificationRead(threadID: String) async throws {
+        if let error {
+            throw error
+        }
+        recorder.recordMarkRead(threadID)
     }
 
     func notifications() async throws -> [GitHubNotification] {
-        throw Unstubbed.notImplemented
+        if let error {
+            throw error
+        }
+        return notificationsResult
     }
 }
 
@@ -74,5 +100,40 @@ extension SearchIssue {
     /// Builds `count` distinct stub issues.
     static func stubs(count: Int) -> [SearchIssue] {
         (0..<count).map { stub(id: $0, number: $0) }
+    }
+}
+
+extension GitHubNotification {
+    /// Builds a `GitHubNotification` for tests by decoding a synthetic payload, mirroring
+    /// `SearchIssue.stub` so tests don't lean on the (non-public) memberwise initializer.
+    static func stub(
+        id: String,
+        unread: Bool = true,
+        reason: String = "review_requested",
+        type: String = "PullRequest",
+        repo: String = "octo/repo",
+        title: String = "Stub notification"
+    )
+    -> GitHubNotification {
+        let json = """
+        {
+          "id": "\(id)",
+          "unread": \(unread),
+          "reason": "\(reason)",
+          "updated_at": "2026-01-01T00:00:00Z",
+          "subject": {
+            "title": "\(title)",
+            "type": "\(type)",
+            "url": "https://api.github.com/repos/\(repo)/pulls/1"
+          },
+          "repository": { "full_name": "\(repo)" }
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let notification = try? decoder.decode(GitHubNotification.self, from: Data(json.utf8)) else {
+            fatalError("GitHubNotification.stub produced invalid JSON")
+        }
+        return notification
     }
 }
