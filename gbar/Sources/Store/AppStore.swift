@@ -268,6 +268,70 @@ final class AppStore {
         }
     }
 
+    // MARK: - Quick actions
+
+    /// Approve a pull request. Builds the API client the same way `refresh()` does, submits an
+    /// approving review, and surfaces any failure via `lastErrorMessage`. Approval doesn't
+    /// change which lists the PR belongs to, so on success we just clear a stale error.
+    func approve(_ item: SearchIssue) async {
+        guard let credential else { return }
+        let api = makeAPI(apiBaseURL, credential.token)
+        do {
+            try await api.approvePullRequest(repo: item.repositorySlug, number: item.number)
+            lastErrorMessage = nil
+        } catch {
+            handleActionError(
+                error,
+                verb: "approve",
+                fallback: "Failed to approve \(item.repositorySlug) #\(item.number).",
+                item: item
+            )
+        }
+    }
+
+    /// Merge a pull request with the chosen strategy. On success the PR is removed from every
+    /// section after a successful merge (it's no longer open, so it would drop out on the next
+    /// refresh anyway); failures surface via `lastErrorMessage`.
+    func merge(_ item: SearchIssue, method: MergeMethod) async {
+        guard let credential else { return }
+        let api = makeAPI(apiBaseURL, credential.token)
+        do {
+            try await api.mergePullRequest(repo: item.repositorySlug, number: item.number, method: method)
+            lastErrorMessage = nil
+            removeItem(id: item.id)
+        } catch {
+            handleActionError(
+                error,
+                verb: "merge",
+                fallback: "Failed to merge \(item.repositorySlug) #\(item.number).",
+                item: item
+            )
+        }
+    }
+
+    /// Shared failure handling for quick actions. A 401 means the token is dead, so mirror
+    /// `hydrate`'s behaviour — flag `sessionExpired` and prompt a reconnect — instead of a
+    /// generic per-action failure; anything else surfaces the caller's `fallback` message.
+    private func handleActionError(_ error: Error, verb: String, fallback: String, item: SearchIssue) {
+        if case .http(401) = error as? GitHubClient.ClientError {
+            sessionExpired = true
+            lastErrorMessage = "Session expired — reconnect in Settings."
+        } else {
+            lastErrorMessage = fallback
+        }
+        let ref = "\(item.repositorySlug)#\(item.number)"
+        let reason = error.localizedDescription
+        Log.network
+            .error("\(verb, privacy: .public) failed for \(ref, privacy: .public): \(reason, privacy: .public)")
+    }
+
+    /// Drop an item (by id) from every loaded section — used for optimistic UI after a merge.
+    private func removeItem(id: Int) {
+        sections = sections.map { section in
+            LoadedSection(id: section.id, title: section.title, items: section.items.filter { $0.id != id })
+        }
+    }
+
     /// Fetch one section, returning it on success or `nil` on failure while performing the
     /// shared 401/other-error handling, logging, and error-message mutation.
     private func hydrate(section: SearchQuery.Section, using api: GitHubAPI) async -> LoadedSection? {

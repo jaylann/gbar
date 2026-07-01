@@ -1,19 +1,49 @@
 import Foundation
 @testable import gbar
 
-/// Records calls made to the fake, so tests can assert on side effects the value-type fake
-/// can't capture in a non-`mutating` method. `@unchecked Sendable` via a lock.
+/// Thread-safe recorder for the side-effecting calls a `FakeGitHubAPI` receives
+/// (mark-as-read, approve, merge), so tests can assert on them even though the value-type,
+/// `let`-held fake can't capture calls in a non-`mutating` method. `@unchecked Sendable` via a lock.
 final class CallRecorder: @unchecked Sendable {
+    struct Approve: Equatable {
+        let repo: String
+        let number: Int
+    }
+
+    struct Merge: Equatable {
+        let repo: String
+        let number: Int
+        let method: MergeMethod
+    }
+
     private let lock = NSLock()
     private var _markedThreadIDs: [String] = []
+    private var _approvals: [Approve] = []
+    private var _merges: [Merge] = []
 
     /// Thread IDs passed to `markNotificationRead`, in call order.
     var markedThreadIDs: [String] {
         lock.withLock { _markedThreadIDs }
     }
 
+    var approvals: [Approve] {
+        lock.withLock { _approvals }
+    }
+
+    var merges: [Merge] {
+        lock.withLock { _merges }
+    }
+
     func recordMarkRead(_ threadID: String) {
         lock.withLock { _markedThreadIDs.append(threadID) }
+    }
+
+    func recordApprove(repo: String, number: Int) {
+        lock.withLock { _approvals.append(Approve(repo: repo, number: number)) }
+    }
+
+    func recordMerge(repo: String, number: Int, method: MergeMethod) {
+        lock.withLock { _merges.append(Merge(repo: repo, number: number, method: method)) }
     }
 }
 
@@ -32,7 +62,10 @@ struct FakeGitHubAPI: GitHubAPI {
     /// When set, only `notifications()` throws this error — section queries still succeed.
     /// Lets tests exercise the best-effort guarantee (a flaky inbox never blanks sections).
     var notificationsError: Error?
-    /// Captures side-effecting calls (e.g. mark-as-read) for assertions.
+    /// When set, only the mutating actions (approve/merge) throw — search still succeeds.
+    /// Lets a test populate the store via a real refresh, then fail just the action.
+    var actionError: Error?
+    /// Captures side-effecting calls (mark-as-read, approve, merge) for assertions.
     var recorder = CallRecorder()
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
@@ -42,7 +75,7 @@ struct FakeGitHubAPI: GitHubAPI {
         return resultsByQuery[query] ?? defaultResult
     }
 
-    /// The mutation/detail endpoints aren't exercised by these tests; stub them so the fake
+    /// Detail/notification endpoints aren't exercised by these tests; stub them so the fake
     /// satisfies the full `GitHubAPI` surface. Each throws so an accidental call fails loudly.
     private enum Unstubbed: Error { case notImplemented }
 
@@ -50,12 +83,18 @@ struct FakeGitHubAPI: GitHubAPI {
         throw Unstubbed.notImplemented
     }
 
-    func approvePullRequest(repo _: String, number _: Int) async throws {
-        throw Unstubbed.notImplemented
+    /// Records the approval, then throws `error` if one is injected so error paths are testable.
+    func approvePullRequest(repo: String, number: Int) async throws {
+        recorder.recordApprove(repo: repo, number: number)
+        if let error { throw error }
+        if let actionError { throw actionError }
     }
 
-    func mergePullRequest(repo _: String, number _: Int, method _: MergeMethod) async throws {
-        throw Unstubbed.notImplemented
+    /// Records the merge, then throws `error` if one is injected so error paths are testable.
+    func mergePullRequest(repo: String, number: Int, method: MergeMethod) async throws {
+        recorder.recordMerge(repo: repo, number: number, method: method)
+        if let error { throw error }
+        if let actionError { throw actionError }
     }
 
     func markNotificationRead(threadID: String) async throws {
