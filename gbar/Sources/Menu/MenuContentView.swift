@@ -9,7 +9,7 @@ struct MenuContentView: View {
     @Environment(\.openSettings) private var openSettings
 
     private var isEmpty: Bool {
-        store.sections.allSatisfy(\.items.isEmpty)
+        store.sections.allSatisfy(\.items.isEmpty) && store.notifications.isEmpty
     }
 
     var body: some View {
@@ -107,8 +107,45 @@ struct MenuContentView: View {
                         }
                     }
                 }
+                if !store.notifications.isEmpty {
+                    Section {
+                        ForEach(store.notifications) { notification in
+                            notificationRow(notification)
+                        }
+                    } header: {
+                        SectionHeader(title: "Notifications", count: store.notifications.count)
+                    }
+                }
             }
             .padding(.vertical, Theme.Spacing.xs)
+        }
+    }
+
+    /// A notification row: tap the body to open it in the browser (best-effort URL from the
+    /// API subject), with a trailing mark-as-read action shown while it's unread. HoverRow has
+    /// no trailing-accessory slot yet, so the action lives inside the row content.
+    private func notificationRow(_ notification: GitHubNotification) -> some View {
+        HoverRow {
+            HStack(spacing: Theme.Spacing.xs) {
+                Button {
+                    if let url = notification.htmlURL(apiBaseURL: store.apiBaseURL) { openURL(url) }
+                } label: {
+                    NotificationRow(model: NotificationRow.Model(notification))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+
+                if notification.unread {
+                    Button {
+                        Task { await store.markRead(notification) }
+                    } label: {
+                        Image(systemName: "checkmark")
+                    }
+                    .buttonStyle(GBButtonStyle(variant: .icon))
+                    .help("Mark as read")
+                    .accessibilityLabel("Mark as read")
+                }
+            }
         }
     }
 
