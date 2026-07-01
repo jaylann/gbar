@@ -38,17 +38,36 @@ bootstrap:
 
 # ─── Project generation ─────────────────────────────────────────────
 
+# Materialize the gitignored Tuist xcconfigs from their tracked templates (idempotent).
+# Kept separate so `gen` is self-sufficient on a fresh clone / CI checkout.
+_xcconfig:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    for cfg in Debug Release; do
+        target="Tuist/Config/${cfg}.xcconfig"
+        template="${target}.template"
+        if [[ ! -f "$target" && -f "$template" ]]; then
+            cp "$template" "$target"
+        fi
+    done
+
 # Install Tuist deps and regenerate the Xcode project
-gen:
+gen: _xcconfig
     tuist install
     tuist generate --no-open
     @just lsp-setup
 
 # Regenerate buildServer.json so sourcekit-lsp (swift-lsp plugin) resolves
 # cross-module symbols. The file is machine-specific (absolute DerivedData paths)
-# and gitignored.
+# and gitignored. No-op where xcode-build-server isn't installed (e.g. CI).
 lsp-setup:
-    xcode-build-server config -workspace {{project}}.xcworkspace -scheme {{project}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v xcode-build-server >/dev/null 2>&1; then
+        xcode-build-server config -workspace {{project}}.xcworkspace -scheme {{project}}
+    else
+        echo "xcode-build-server not installed — skipping buildServer.json"
+    fi
 
 # Remove generated project, derived data, test results
 clean:
