@@ -47,16 +47,27 @@ private struct SettingsOpener: View {
     }
 }
 
-/// Orders the host window out so the scene stays alive (feeding `SettingsOpener`) without ever
-/// showing a stray 1×1 window.
+/// Neutralizes the opener's host window so the scene stays alive (feeding `SettingsOpener`)
+/// without ever showing a stray window: transparent, offscreen, non-interactive, ordered out,
+/// and excluded from state restoration so macOS can't resurrect it visible on the next launch.
 private struct WindowHider: NSViewRepresentable {
     func makeNSView(context _: Context) -> NSView {
         let view = NSView()
-        Task { @MainActor in view.window?.orderOut(nil) }
+        Task { @MainActor in Self.hide(view.window) }
         return view
     }
 
     func updateNSView(_ nsView: NSView, context _: Context) {
-        nsView.window?.orderOut(nil)
+        Self.hide(nsView.window)
+    }
+
+    @MainActor
+    private static func hide(_ window: NSWindow?) {
+        guard let window else { return }
+        window.isRestorable = false
+        window.alphaValue = 0
+        window.ignoresMouseEvents = true
+        window.setFrameOrigin(NSPoint(x: -10_000, y: -10_000))
+        window.orderOut(nil)
     }
 }
