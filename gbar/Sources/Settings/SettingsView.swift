@@ -1,55 +1,118 @@
 import SwiftUI
 
-/// Settings: connect an account (device flow or PAT), tune the background refresh cadence,
-/// and point gbar at a GitHub host. Deeper preferences (saved queries, notifications) attach
-/// here as the app grows. See docs/PRODUCT.md.
+/// Settings: manage connected accounts (add via device flow or PAT, each with an optional
+/// host override for Enterprise; remove per account or all at once), tune the background
+/// refresh cadence, and edit saved queries. See docs/PRODUCT.md.
 struct SettingsView: View {
     @Bindable var store: AppStore
     @Environment(\.openURL) private var openURL
 
     @State private var clientID = AppConfig.bakedClientID ?? ""
     @State private var patToken = ""
+    /// Optional per-account host override for the account being added (blank = default host).
+    @State private var addHost = ""
     @State private var status = ""
     @State private var isWorking = false
 
     var body: some View {
         Form {
-            accountSection
+            accountsSection
+            addAccountSection
+            if store.isSignedIn {
+                signOutAllSection
+            }
             refreshSection
             if store.isSignedIn {
                 SavedQueriesSection(store: store)
             }
-            advancedSection
         }
         .formStyle(.grouped)
-        .frame(width: 460, height: 420)
+        .frame(width: 460, height: 460)
         // Owns the whole agent-app activation lifecycle for this window: promote to a
         // regular app + make the window key+main so its text fields accept clicks and
         // typing, then demote back to a no-Dock-icon agent when it actually closes.
         .background(WindowActivator())
     }
 
-    private var accountSection: some View {
-        Section("Account") {
-            if store.isSignedIn {
-                LabeledContent("Status", value: "Connected")
-                Button("Sign out", role: .destructive) { store.signOut() }
+    private var accountsSection: some View {
+        Section("Accounts") {
+            if store.accounts.isEmpty {
+                Text("No accounts connected yet.")
+                    .foregroundStyle(.secondary)
             } else {
-                TextField("OAuth App client ID", text: $clientID)
-                Button("Sign in with GitHub") { Task { await startDeviceFlow() } }
-                    .disabled(clientID.isEmpty || isWorking)
-                Divider()
-                SecureField("…or paste a personal access token", text: $patToken)
-                Button("Use token") {
-                    store.signIn(token: patToken, kind: .personalAccessToken)
-                    patToken = ""
+                ForEach(store.accounts) { account in
+                    accountRow(account)
                 }
-                .disabled(patToken.isEmpty)
             }
+        }
+    }
+
+    private func accountRow(_ account: Account) -> some View {
+        HStack(spacing: Theme.Spacing.sm) {
+            Avatar(login: account.login, url: account.avatarImageURL, size: .medium)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(account.login)
+                Text(hostLabel(account.apiBaseURL))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button(role: .destructive) {
+                store.removeAccount(id: account.id)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(.borderless)
+            .help("Remove \(account.login)")
+            .accessibilityLabel("Remove \(account.login)")
+        }
+    }
+
+    private var addAccountSection: some View {
+        Section("Add account") {
+            TextField("Host (API base URL)", text: $addHost, prompt: Text(store.apiBaseURL.absoluteString))
+                .textFieldStyle(.roundedBorder)
+            Text(
+                "Leave blank for the default host. Override for GitHub Enterprise, e.g. https://ghe.example.com/api/v3"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            TextField("OAuth App client ID", text: $clientID)
+            Button("Sign in with GitHub") { Task { await startDeviceFlow() } }
+                .disabled(clientID.isEmpty || isWorking)
+            Divider()
+            SecureField("…or paste a personal access token", text: $patToken)
+            Button("Add token") { Task { await addToken() } }
+                .disabled(patToken.isEmpty || isWorking)
             if !status.isEmpty {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var signOutAllSection: some View {
+        Section {
+            Button("Sign out of all accounts", role: .destructive) { store.signOutAll() }
+        }
+    }
+
+    /// Short, human-readable host for an account's API base URL.
+    private func hostLabel(_ url: URL) -> String {
+        guard let host = url.host else { return url.absoluteString }
+        return host == "api.github.com" ? "github.com" : host
+    }
+
+    /// The host a newly-added account should use: the override field if filled, else the
+    /// app default. Falls back to the default on an unparseable override.
+    private var resolvedAddURL: URL {
+        let trimmed = addHost.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return store.apiBaseURL }
+        return url
+    }
+
+    private func resetInputs() {
+        patToken = ""
+        addHost = ""
     }
 
     private var refreshSection: some View {
@@ -72,40 +135,38 @@ struct SettingsView: View {
         )
     }
 
-    private var advancedSection: some View {
-        Section("Advanced") {
-            TextField("API base URL", text: apiBaseBinding)
-                .textFieldStyle(.roundedBorder)
-            Text("Override for GitHub Enterprise, e.g. https://ghe.example.com/api/v3")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var apiBaseBinding: Binding<String> {
-        Binding(
-            get: { store.apiBaseURL.absoluteString },
-            set: { if let url = URL(string: $0) { store.apiBaseURL = url } }
-        )
-    }
-
     private func startDeviceFlow() async {
         isWorking = true
         status = "Requesting a device code…"
         defer { isWorking = false }
+        let host = resolvedAddURL
         let client = DeviceFlowClient(
             clientID: clientID,
-            webBaseURL: AppConfig.webBaseURL(forAPI: store.apiBaseURL)
+            webBaseURL: AppConfig.webBaseURL(forAPI: host)
         )
         do {
             let code = try await client.requestDeviceCode(scopes: ["repo", "notifications"])
             status = "Enter code \(code.userCode) in the browser window…"
             if let url = URL(string: code.verificationURI) { openURL(url) }
             let token = try await client.pollForToken(code)
-            store.signIn(token: token, kind: .oauth)
-            status = "Connected."
+            try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
+            status = "Connected \(store.accounts.last.map { "@\($0.login)" } ?? "")."
+            resetInputs()
         } catch {
             status = "Sign-in failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func addToken() async {
+        isWorking = true
+        status = "Validating token…"
+        defer { isWorking = false }
+        do {
+            try await store.addAccount(token: patToken, kind: .personalAccessToken, apiBaseURL: resolvedAddURL)
+            status = "Added \(store.accounts.last.map { "@\($0.login)" } ?? "")."
+            resetInputs()
+        } catch {
+            status = "Couldn't add token: \(error.localizedDescription)"
         }
     }
 }
