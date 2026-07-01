@@ -378,7 +378,7 @@ final class AppStoreTests: XCTestCase {
         let store = AppStore(
             apiBaseURL: urlA,
             accounts: [alice, bob],
-            makeAPI: { base, _ in base == urlB ? fakeB : fakeA }
+            makeAPI: { [fakeA, fakeB] base, _ in base == urlB ? fakeB : fakeA }
         )
         return (store, alice, bob)
     }
@@ -434,7 +434,7 @@ final class AppStoreTests: XCTestCase {
         var fake = FakeGitHubAPI()
         fake.currentUserResult = GitHubUser(login: "legacyuser", avatarURL: nil)
         fake.defaultResult = SearchIssue.stubs(count: 1)
-        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { [fake] _, _ in fake })
 
         // Redirect token storage to an in-memory box so the Keychain isn't touched.
         let box = TokenBox()
@@ -463,7 +463,7 @@ final class AppStoreTests: XCTestCase {
         let url = try makeURL()
         var fake = FakeGitHubAPI()
         fake.currentUserResult = GitHubUser(login: "legacyuser", avatarURL: nil)
-        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { [fake] _, _ in fake })
         let box = TokenBox()
         store.storeToken = { token, key in box.set(token, key) }
         store.deleteToken = { box.remove($0) }
