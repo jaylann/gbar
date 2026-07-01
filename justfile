@@ -119,7 +119,7 @@ build: _ensure
         -destination "platform=macOS" \
         -derivedDataPath "{{derived}}" \
         -configuration Debug \
-        build | tail -30
+        build 2>&1 | grep -E "error:|warning:|BUILD" | tail -80
     # Return xcodebuild's real exit code, not tail's.
     exit ${PIPESTATUS[0]}
 
