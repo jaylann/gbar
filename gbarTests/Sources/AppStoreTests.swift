@@ -65,6 +65,21 @@ final class AppStoreTests: XCTestCase {
         XCTAssertFalse(store.sessionExpired)
     }
 
+    /// Two overlapping `refresh()` calls must coalesce into a single fetch wave (#10). Without the
+    /// single-flight guard, the second call starts its own wave and doubles the section queries.
+    func testConcurrentRefreshCoalescesIntoSingleWave() async throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+
+        async let first: Void = store.refresh()
+        async let second: Void = store.refresh()
+        _ = await (first, second)
+
+        // One account × the default saved queries — exactly one wave, not two.
+        XCTAssertEqual(fake.recorder.searchCount, SearchQuery.defaults.count)
+        XCTAssertFalse(store.isRefreshing)
+    }
+
     // MARK: - Quick actions
 
     func testApproveRecordsCallOnHappyPath() async throws {
