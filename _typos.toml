@@ -8,6 +8,12 @@ extend-exclude = [
   ".git/",
 ]
 
+[default]
+extend-ignore-re = [
+  # Hex color literals, e.g. "6639BA" — letter pairs like "BA" trip the spellcheck.
+  "\"#?[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?\"",
+]
+
 [default.extend-words]
 # Add project-specific false positives here, e.g.:
 # gbar = "gbar"
