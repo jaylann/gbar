@@ -38,7 +38,9 @@ extension AppStore {
 
                 // Replace this slice's baseline contribution with the fresh items.
                 newBaseline = newBaseline.filter { !$0.hasPrefix(sectionKey + "\n") }
-                for issue in issues { newBaseline.insert("\(sectionKey)\n\(issue.id)") }
+                for issue in issues {
+                    newBaseline.insert("\(sectionKey)\n\(issue.id)")
+                }
                 newSeeded.insert(sectionKey)
 
                 guard wasSeeded else { continue } // first load seeds silently
@@ -87,7 +89,10 @@ extension AppStore {
 
             guard wasSeeded else { continue } // first load seeds silently
             let tagged = load.notifications.map { AccountNotification(account: account, notification: $0) }
-            candidates.append(contentsOf: NotificationDiff.newNotifications(previousUnreadKeys: previousUnread, current: tagged))
+            candidates.append(contentsOf: NotificationDiff.newNotifications(
+                previousUnreadKeys: previousUnread,
+                current: tagged
+            ))
         }
 
         lastUnreadInboxKeys = newBaseline
