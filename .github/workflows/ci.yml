@@ -1,9 +1,9 @@
 name: ci
 
-# CI gate for gbar: lint (SwiftFormat + SwiftLint) → build (compile the macOS app) →
-# test (the deterministic unit suite) → typos. The build and test jobs run in parallel
-# on separate runners, so a red test next to a green build points straight at "logic
-# broke" vs "won't compile". The `gbarTests/` suite is pure unit tests over fakes
+# CI gate for gbar: lint (`just check` = SwiftFormat + SwiftLint + typos) → build (compile
+# the macOS app) → test (the deterministic unit suite). The build and test jobs run in
+# parallel on separate runners, so a red test next to a green build points straight at
+# "logic broke" vs "won't compile". The `gbarTests/` suite is pure unit tests over fakes
 # (FakeGitHubAPI + MockURLProtocol) — no XCUIApplication, nothing flaky. Ad-hoc signing
 # (CODE_SIGN_IDENTITY = -) needs no secrets on CI, and the public repo gets free
 # macOS-runner minutes.
@@ -25,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install tools
-        run: brew install swiftformat swiftlint tuist just
+        run: brew install swiftformat swiftlint tuist just typos-cli
       - name: Generate project
         run: just gen
       - name: Lint checks
@@ -58,11 +58,3 @@ jobs:
         run: just gen
       - name: Test (macOS)
         run: just test
-
-  typos:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v5
-      - name: Spellcheck
-        uses: crate-ci/typos@master
