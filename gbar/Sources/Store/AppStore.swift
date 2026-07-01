@@ -73,6 +73,18 @@ final class AppStore {
     @ObservationIgnored
     var makeAPI: @Sendable (_ baseURL: URL, _ token: String) -> GitHubAPI = { GitHubClient(baseURL: $0, token: $1) }
 
+    /// User-editable menu sections. Seeded from `SearchQuery.defaults` on first launch;
+    /// persisted as JSON so custom queries and ordering survive relaunches.
+    var savedQueries: [SearchQuery.Section] {
+        didSet {
+            if let data = try? JSONEncoder().encode(savedQueries) {
+                UserDefaults.standard.set(data, forKey: Self.savedQueriesKey)
+            }
+        }
+    }
+
+    private static let savedQueriesKey = "gbar.savedQueries"
+
     var isSignedIn: Bool {
         credential != nil
     }
@@ -98,6 +110,20 @@ final class AppStore {
         } else {
             pollInterval = PollInterval.m1.rawValue
         }
+        // Key absent → first launch, seed defaults. Key present (even if `[]`) → the user
+        // may have intentionally cleared the list, so respect it and don't resurrect defaults.
+        if let data = UserDefaults.standard.data(forKey: Self.savedQueriesKey) {
+            do {
+                savedQueries = try JSONDecoder().decode([SearchQuery.Section].self, from: data)
+            } catch {
+                // Present-but-undecodable blob (e.g. a future schema change): fall back to
+                // defaults in memory, but log so it's diagnosable rather than silently lost.
+                Log.store.error("saved queries decode failed: \(error.localizedDescription, privacy: .public)")
+                savedQueries = SearchQuery.defaults
+            }
+        } else {
+            savedQueries = SearchQuery.defaults
+        }
         if let token = KeychainStore.get(Credential.keychainKey) {
             credential = Credential(kind: .oauth, token: token)
         }
@@ -110,10 +136,25 @@ final class AppStore {
     init(apiBaseURL: URL, credential: Credential, makeAPI: @escaping @Sendable (URL, String) -> GitHubAPI) {
         self.apiBaseURL = apiBaseURL
         pollInterval = PollInterval.off.rawValue
+        savedQueries = SearchQuery.defaults
         self.credential = credential
         self.makeAPI = makeAPI
     }
     #endif
+
+    /// Append a fresh, empty saved query for the user to fill in. The UUID id keeps it
+    /// distinct from the baseline sections (so badge/actionable semantics are unaffected).
+    func addSavedQuery() {
+        savedQueries.append(SearchQuery.Section(id: UUID().uuidString, title: "", query: ""))
+    }
+
+    func deleteSavedQuery(at offsets: IndexSet) {
+        savedQueries.remove(atOffsets: offsets)
+    }
+
+    func moveSavedQuery(from source: IndexSet, to destination: Int) {
+        savedQueries.move(fromOffsets: source, toOffset: destination)
+    }
 
     func signIn(token: String, kind: Credential.Kind) {
         do {
@@ -176,7 +217,10 @@ final class AppStore {
 
         let api = makeAPI(apiBaseURL, credential.token)
         var loaded: [LoadedSection] = []
-        for section in SearchQuery.defaults {
+        for section in savedQueries {
+            // Skip blank/incomplete rows (e.g. a freshly-added query still being edited);
+            // GitHub rejects an empty `q` with 422, which would show a persistent error.
+            guard section.isRunnable else { continue }
             if let hydrated = await hydrate(section: section, using: api) {
                 loaded.append(hydrated)
             }

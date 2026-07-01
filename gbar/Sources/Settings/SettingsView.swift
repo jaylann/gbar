@@ -16,6 +16,9 @@ struct SettingsView: View {
         Form {
             accountSection
             refreshSection
+            if store.isSignedIn {
+                SavedQueriesSection(store: store)
+            }
             advancedSection
         }
         .formStyle(.grouped)
