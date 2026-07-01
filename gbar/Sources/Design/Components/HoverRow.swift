@@ -50,14 +50,14 @@ struct HoverRow<Accessory: View, Content: View>: View {
         .padding(.vertical, density.rowVerticalPadding)
         .frame(minHeight: density.rowHeight, alignment: .leading)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(fill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        .background(fill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         .overlay {
             if isFocused {
-                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
                     .strokeBorder(Surface.focusRing, lineWidth: 1)
             }
         }
-        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
         .onHover { isHovering = $0 }
         .animation(Motion.respecting(reduceMotion, Motion.spring), value: isHovering)
         .animation(Motion.respecting(reduceMotion, Motion.spring), value: isFocused)

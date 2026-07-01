@@ -233,7 +233,7 @@ struct DesignGallery: View {
         VStack(spacing: 2, content: content)
             .background(
                 Color(nsColor: .textBackgroundColor).opacity(0.4),
-                in: RoundedRectangle(cornerRadius: Theme.Radius.md)
+                in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous)
             )
     }
 }

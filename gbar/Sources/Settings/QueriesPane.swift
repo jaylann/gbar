@@ -79,7 +79,7 @@ struct QueriesPane: View {
             }
         }
         .padding(Theme.Spacing.sm)
-        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
     private func reorderControls(index: Int, count: Int) -> some View {

@@ -52,8 +52,8 @@ private struct TooltipModifier: ViewModifier {
             .foregroundStyle(.primary)
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, 3)
-            .background(Surface.canvas, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
-            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.sm).strokeBorder(Surface.hairline))
+            .background(Surface.canvas, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous).strokeBorder(Surface.hairline))
             .shadow(color: .black.opacity(0.22), radius: 4, y: 2)
     }
 }

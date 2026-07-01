@@ -189,7 +189,7 @@ struct AccountsPane: View {
         }
         .padding(Theme.Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
     /// Enterprise host, revealed on demand so the common github.com case stays uncluttered.
@@ -354,7 +354,7 @@ private struct SettingsFieldStyle: ViewModifier {
             .font(Theme.Typography.caption)
             .padding(.horizontal, Theme.Spacing.sm)
             .frame(height: 28)
-            .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+            .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
     }
 }
 

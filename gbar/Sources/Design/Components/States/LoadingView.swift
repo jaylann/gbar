@@ -30,7 +30,7 @@ struct SkeletonRow: View {
     }
 
     private func bar(width: CGFloat, height: CGFloat) -> some View {
-        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
             .fill(Surface.controlFill)
             .frame(width: width, height: height)
     }
