@@ -26,15 +26,17 @@ private enum PRFilter {
     case needsReview
 }
 
-/// The MenuBarExtra window, built on the design system: a consolidated top bar — inline
-/// `PRs | Issues | Inbox` tabs on the left, a search toggle and refresh on the right — with
-/// a search field that slides in on demand and PR filter chips on the PRs tab. Below it, the
-/// active tab's sections (or its own first-load skeleton / caught-up / error state) and a
-/// footer. Sign-in prompt when signed out.
+/// The status-item popover, built on the design system: a consolidated top bar — inline
+/// `PRs | Issues | Inbox` tabs on the left, a search toggle, refresh, and a Settings gear on
+/// the right — with a search field that slides in on demand and PR filter chips on the PRs tab.
+/// Below it, the active tab's sections (or its own first-load skeleton / caught-up / error
+/// state). Sign-in prompt when signed out.
 struct MenuContentView: View {
     @Bindable var store: AppStore
+    /// Opens the Settings scene. Injected by `StatusItemController` because this view is hosted
+    /// in an `NSPopover` (outside the SwiftUI scene graph), where `\.openSettings` isn't wired.
+    let openSettings: () -> Void
     @Environment(\.openURL) private var openURL
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @AppStorage("gbar.menu.selectedTab") private var selectedTabRaw = MenuTab.prs.rawValue
@@ -74,8 +76,6 @@ struct MenuContentView: View {
                     SignInPromptView { openSettingsWindow() }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Divider()
-                footer
             }
             // Give the signed-in popover a comfortable minimum body so a short list still opens
             // tall; the sign-in prompt sizes to its content (`maxHeight` on the container caps both).
@@ -107,6 +107,11 @@ struct MenuContentView: View {
             .buttonStyle(GBButtonStyle(variant: .icon, isLoading: store.isRefreshing))
             .disabled(store.isRefreshing || !store.isSignedIn)
             .gbTooltip("Refresh", edge: .bottom)
+            Button { openSettingsWindow() } label: {
+                Image(systemName: "gearshape")
+            }
+            .buttonStyle(GBButtonStyle(variant: .icon))
+            .gbTooltip("Settings", edge: .bottom)
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.sm)
@@ -416,19 +421,6 @@ extension MenuContentView {
             }
         })
     }
-
-    private var footer: some View {
-        HStack {
-            Button("Settings…") { openSettingsWindow() }
-                .buttonStyle(GBButtonStyle(variant: .ghost))
-            Spacer()
-            Button("Quit") { NSApplication.shared.terminate(nil) }
-                .buttonStyle(GBButtonStyle(variant: .ghost))
-        }
-        // Sit the ghost buttons closer to the edges so their rounding echoes the popover corner.
-        .padding(.horizontal, Theme.Spacing.sm)
-        .padding(.vertical, Theme.Spacing.sm)
-    }
 }
 
 /// A PR list row: the tappable open-in-browser row plus, when CI has been hydrated,
@@ -594,6 +586,6 @@ private struct PRQuickActions: View {
 
 #if DEBUG
 #Preview("Menu — signed out") {
-    MenuContentView(store: AppStore())
+    MenuContentView(store: AppStore()) {}
 }
 #endif
