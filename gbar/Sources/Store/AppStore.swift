@@ -68,6 +68,11 @@ final class AppStore {
     /// The single in-flight poll loop, if any. `@MainActor`-isolated like the rest of the store.
     private var pollTask: Task<Void, Never>?
 
+    /// Builds the API client used by `refresh()`. Overridable so tests can inject a fake
+    /// `GitHubAPI` without touching the network; defaults to the live `GitHubClient`.
+    @ObservationIgnored
+    var makeAPI: @Sendable (_ baseURL: URL, _ token: String) -> GitHubAPI = { GitHubClient(baseURL: $0, token: $1) }
+
     var isSignedIn: Bool {
         credential != nil
     }
@@ -98,6 +103,17 @@ final class AppStore {
         }
         startPolling()
     }
+
+    #if DEBUG
+    /// Test-only initializer: constructs a store with a fixed base URL, an already-signed-in
+    /// credential, and an injectable API factory — no Keychain/UserDefaults side effects.
+    init(apiBaseURL: URL, credential: Credential, makeAPI: @escaping @Sendable (URL, String) -> GitHubAPI) {
+        self.apiBaseURL = apiBaseURL
+        pollInterval = PollInterval.off.rawValue
+        self.credential = credential
+        self.makeAPI = makeAPI
+    }
+    #endif
 
     func signIn(token: String, kind: Credential.Kind) {
         do {
@@ -158,25 +174,34 @@ final class AppStore {
             hasLoaded = true
         }
 
-        let client = GitHubClient(baseURL: apiBaseURL, token: credential.token)
+        let api = makeAPI(apiBaseURL, credential.token)
         var loaded: [LoadedSection] = []
         for section in SearchQuery.defaults {
-            do {
-                let items = try await client.searchIssues(section.query)
-                loaded.append(LoadedSection(id: section.id, title: section.title, items: items))
-            } catch {
-                if case .http(401) = error as? GitHubClient.ClientError {
-                    sessionExpired = true
-                    lastErrorMessage = "Session expired — reconnect in Settings."
-                } else {
-                    lastErrorMessage = "Failed to load \(section.title)."
-                }
-                Log.network
-                    .error(
-                        "search failed for \(section.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
-                    )
+            if let hydrated = await hydrate(section: section, using: api) {
+                loaded.append(hydrated)
             }
         }
         sections = loaded
+    }
+
+    /// Fetch one section, returning it on success or `nil` on failure while performing the
+    /// shared 401/other-error handling, logging, and error-message mutation.
+    private func hydrate(section: SearchQuery.Section, using api: GitHubAPI) async -> LoadedSection? {
+        do {
+            let items = try await api.searchIssues(section.query)
+            return LoadedSection(id: section.id, title: section.title, items: items)
+        } catch {
+            if case .http(401) = error as? GitHubClient.ClientError {
+                sessionExpired = true
+                lastErrorMessage = "Session expired — reconnect in Settings."
+            } else {
+                lastErrorMessage = "Failed to load \(section.title)."
+            }
+            Log.network
+                .error(
+                    "search failed for \(section.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
+                )
+            return nil
+        }
     }
 }

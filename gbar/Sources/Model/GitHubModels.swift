@@ -69,3 +69,72 @@ struct SearchIssue: Decodable, Identifiable {
         return "\(parts[parts.count - 2])/\(parts[parts.count - 1])"
     }
 }
+
+/// The full detail for a single pull request (`GET /repos/{owner}/{repo}/pulls/{number}`) —
+/// a superset of `SearchIssue` with merge state used by quick actions.
+struct PullRequestDetail: Decodable {
+    let id: Int
+    let number: Int
+    let title: String
+    let state: String
+    let htmlURL: String
+    let merged: Bool?
+    let mergeable: Bool?
+    let draft: Bool?
+    let user: GitHubUser?
+    let createdAt: Date
+    let updatedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case number
+        case title
+        case state
+        case htmlURL = "html_url"
+        case merged
+        case mergeable
+        case draft
+        case user
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+    }
+}
+
+/// One item from `GET /notifications` — an unread/read thread pointing at a PR, issue, etc.
+struct GitHubNotification: Decodable, Identifiable {
+    struct Subject: Decodable {
+        let title: String
+        let type: String
+        let url: String?
+
+        enum CodingKeys: String, CodingKey {
+            case title
+            case type
+            case url
+        }
+    }
+
+    struct Repo: Decodable {
+        let fullName: String
+
+        enum CodingKeys: String, CodingKey {
+            case fullName = "full_name"
+        }
+    }
+
+    let id: String
+    let unread: Bool
+    let reason: String
+    let updatedAt: Date
+    let subject: Subject
+    let repository: Repo
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case unread
+        case reason
+        case updatedAt = "updated_at"
+        case subject
+        case repository
+    }
+}
