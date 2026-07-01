@@ -22,6 +22,7 @@ struct SettingsView: View {
                 signOutAllSection
             }
             refreshSection
+            notificationsSection
             if store.isSignedIn {
                 SavedQueriesSection(store: store)
             }
@@ -123,6 +124,21 @@ struct SettingsView: View {
                 }
             }
             Text("How often gbar checks GitHub in the background — keeps the badge current while the menu is closed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var notificationsSection: some View {
+        Section("Notifications") {
+            Toggle("Enable notifications", isOn: $store.notificationsEnabled)
+            Group {
+                Toggle("New notifications", isOn: $store.notifyInbox)
+                Toggle("New PRs & issues", isOn: $store.notifySections)
+                Toggle("CI status changes", isOn: $store.notifyChecks)
+            }
+            .disabled(!store.notificationsEnabled)
+            Text("Native banners for new items and CI pass/fail on your PRs. Click one to open it in the browser.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }

@@ -71,6 +71,9 @@ struct FakeGitHubAPI: GitHubAPI {
     var pullRequestResult: PullRequestDetail = .stub()
     /// Returned by `checkRuns` (defaults to empty, so CI hydration is a no-op unless stubbed).
     var checkRunsResult: [CheckRun] = []
+    /// When set, `checkRuns` throws this — simulates a transient CI-fetch failure while the PR
+    /// still loads into its section (so its CI baseline must be preserved, not wiped).
+    var checkRunsError: Error?
     /// Returned by `currentUser()` — the account a token resolves to when validated/added.
     var currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
 
@@ -95,7 +98,10 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 
     func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
-        checkRunsResult
+        if let checkRunsError {
+            throw checkRunsError
+        }
+        return checkRunsResult
     }
 
     /// Records the approval, then throws `error` if one is injected so error paths are testable.

@@ -56,6 +56,10 @@ struct AccountLoad {
     /// failed for this account (so the merged section can still show other accounts' rows).
     var sections: [String: [SearchIssue]]
     var notifications: [GitHubNotification]
+    /// Whether the `/notifications` fetch succeeded this poll. The notification diff advances
+    /// (and seeds) the inbox baseline only for accounts that loaded, so a transient inbox
+    /// failure can't drop threads from the baseline and re-fire them as "new" on recovery.
+    var notificationsSucceeded: Bool
     var sessionExpired: Bool
     var errorMessage: String?
 }
