@@ -41,6 +41,11 @@ struct MenuContentView: View {
         if let message = store.lastErrorMessage {
             Text(message).font(.caption).foregroundStyle(.orange)
         }
+        if store.sessionExpired {
+            SettingsLink { Text("Reconnect…") }
+                .buttonStyle(.borderless)
+                .font(.caption)
+        }
         if store.sections.allSatisfy(\.items.isEmpty), !store.isRefreshing {
             Text("Nothing to show right now.").font(.callout).foregroundStyle(.secondary)
         }
