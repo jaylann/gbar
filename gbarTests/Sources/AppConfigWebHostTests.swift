@@ -20,7 +20,7 @@ final class AppConfigWebHostTests: XCTestCase {
         XCTAssertEqual(web.absoluteString, "https://ghe.example.com:8443")
     }
 
-    func testUnparseableFallsBackToPublicHost() throws {
+    func testUnparsableFallsBackToPublicHost() throws {
         let api = try XCTUnwrap(URL(string: "file:///local/path"))
         let web = AppConfig.webBaseURL(forAPI: api)
         XCTAssertEqual(web.absoluteString, "https://github.com")
