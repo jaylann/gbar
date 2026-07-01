@@ -8,6 +8,7 @@ final class CallRecorder: @unchecked Sendable {
     struct Approve: Equatable {
         let repo: String
         let number: Int
+        var body: String?
     }
 
     struct Merge: Equatable {
@@ -48,8 +49,8 @@ final class CallRecorder: @unchecked Sendable {
         lock.withLock { _markedThreadIDs.append(threadID) }
     }
 
-    func recordApprove(repo: String, number: Int) {
-        lock.withLock { _approvals.append(Approve(repo: repo, number: number)) }
+    func recordApprove(repo: String, number: Int, body: String?) {
+        lock.withLock { _approvals.append(Approve(repo: repo, number: number, body: body)) }
     }
 
     func recordMerge(repo: String, number: Int, method: MergeMethod) {
@@ -130,8 +131,8 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 
     /// Records the approval, then throws `error` if one is injected so error paths are testable.
-    func approvePullRequest(repo: String, number: Int) async throws {
-        recorder.recordApprove(repo: repo, number: number)
+    func approvePullRequest(repo: String, number: Int, body: String?) async throws {
+        recorder.recordApprove(repo: repo, number: number, body: body)
         if let error { throw error }
         if let actionError { throw actionError }
     }
@@ -221,7 +222,7 @@ actor GatedGitHubAPI: GitHubAPI {
     }
 
     private enum Unstubbed: Error { case notImplemented }
-    func approvePullRequest(repo _: String, number _: Int) async throws {
+    func approvePullRequest(repo _: String, number _: Int, body _: String?) async throws {
         throw Unstubbed.notImplemented
     }
 
@@ -371,10 +372,22 @@ extension PullRequestReview {
 }
 
 extension RepositoryInfo {
-    /// Repository info carrying only the viewer's `push` permission (the merge gate signal).
-    static func stub(push: Bool) -> RepositoryInfo {
+    /// Repository info carrying the viewer's `push` permission (the merge gate signal) plus the
+    /// repo's enabled merge strategies (default all three, matching a typical repo).
+    static func stub(
+        push: Bool,
+        allowMerge: Bool = true,
+        allowSquash: Bool = true,
+        allowRebase: Bool = true
+    )
+    -> RepositoryInfo {
         let json = """
-        { "permissions": { "push": \(push), "maintain": false, "admin": false } }
+        {
+          "permissions": { "push": \(push), "maintain": false, "admin": false },
+          "allow_merge_commit": \(allowMerge),
+          "allow_squash_merge": \(allowSquash),
+          "allow_rebase_merge": \(allowRebase)
+        }
         """
         guard let info = try? testDecoder.decode(RepositoryInfo.self, from: Data(json.utf8)) else {
             fatalError("RepositoryInfo.stub produced invalid JSON")

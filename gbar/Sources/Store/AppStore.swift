@@ -20,17 +20,20 @@ final class AppStore {
     private(set) var notifications: [AccountNotification] = []
     /// Best-effort CI status per PR, keyed by `(accountID, prID)`. Kept in a side map (not on
     /// `LoadedSection`) because it's hydrated asynchronously after the initial load and is
-    /// decorative — a failure here never blocks the list or surfaces an error.
-    private(set) var prChecks: [PRCheckKey: PRChecks] = [:]
+    /// decorative — a failure here never blocks the list or surfaces an error. Written only by
+    /// the hydration wave (`AppStoreHydration.swift`) and the reset sites here; views read only.
+    var prChecks: [PRCheckKey: PRChecks] = [:]
     /// Best-effort action gate per PR, keyed like `prChecks`. Decides whether the hover
     /// Approve/Merge buttons show; hydrated in the same wave as `prChecks`. Absent = not yet
-    /// hydrated → the row stays optimistic (buttons show).
-    private(set) var prGates: [PRCheckKey: PRGate] = [:]
-    /// Cache of the viewer's push access per repo, keyed `"\(accountID)\n\(slug)"`. Filled
-    /// lazily during hydration so we don't refetch `GET /repos/{repo}` every poll; a repo's
-    /// permission rarely changes within a session (and is refreshed on relaunch). Mutated by
-    /// the hydration helpers in `AppStoreHydration.swift`, so it's internal (not `private`).
-    var repoCanMerge: [String: Bool] = [:]
+    /// hydrated → the row stays optimistic (buttons show). Written only by the hydration wave
+    /// and the reset sites here; views read only.
+    var prGates: [PRCheckKey: PRGate] = [:]
+    /// Cache of the viewer's merge signals per repo (push access + allowed strategies), keyed
+    /// `"\(accountID)\n\(slug)"`. Filled lazily during hydration so we don't refetch
+    /// `GET /repos/{repo}` every poll; a repo's permissions/settings rarely change within a
+    /// session (and are refreshed on relaunch). Mutated by the hydration helpers in
+    /// `AppStoreHydration.swift`, so it's internal (not `private`).
+    var repoMergeInfo: [String: RepoMergeInfo] = [:]
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
@@ -587,7 +590,7 @@ extension AppStore {
         notifications.removeAll { $0.account.id == id }
         prChecks = prChecks.filter { $0.key.accountID != id }
         prGates = prGates.filter { $0.key.accountID != id }
-        repoCanMerge = repoCanMerge.filter { !$0.key.hasPrefix("\(id)\n") }
+        repoMergeInfo = repoMergeInfo.filter { !$0.key.hasPrefix("\(id)\n") }
         if accounts.isEmpty {
             resetSignedOutState()
         } else {
@@ -628,7 +631,7 @@ extension AppStore {
         notifications = []
         prChecks = [:]
         prGates = [:]
-        repoCanMerge = [:]
+        repoMergeInfo = [:]
         hasLoaded = false
         sessionExpired = false
         expiredAccountID = nil
@@ -697,81 +700,5 @@ extension AppStore {
     private func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
-    }
-}
-
-// MARK: - CI hydration
-
-extension AppStore {
-    /// Best-effort CI hydration across accounts: for every distinct PR (keyed per account),
-    /// fetch its detail then its check runs using that account's client, roll them up, and
-    /// stash the result in `prChecks`. Runs in a detached, non-blocking task with a capped
-    /// `TaskGroup`; failures are swallowed. Stale runs are dropped via `checksGeneration`.
-    func hydrateChecks(for sections: [LoadedSection], apis: [Account.ID: GitHubAPI]) {
-        // Supersede any previous wave so it stops firing requests and can't clobber this one.
-        checksTask?.cancel()
-        checksGeneration += 1
-        let prs = distinctPRFetches(from: sections, apis: apis)
-        // Prune entries for PRs no longer in the list so a dropped-out PR's stale CI dot can't
-        // linger (and `prChecks` can't grow unbounded). Prune the notification baseline the same
-        // way so a PR that leaves every section doesn't retain a stale `lastCheckStatus` (bug #5).
-        // A PR still in the list but whose fetch fails keeps its key here (it's in `prs`), so its
-        // baseline survives — that's what protects bug #3.
-        let live = Set(prs.map(\.key))
-        prChecks = prChecks.filter { live.contains($0.key) }
-        prGates = prGates.filter { live.contains($0.key) }
-        lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
-        guard !prs.isEmpty else {
-            checksTask = nil
-            return
-        }
-        checksTask = checksWave(prs: prs, generation: checksGeneration)
-    }
-
-    /// The capped-concurrency hydration wave. Stale runs (a superseded `generation`) drop their
-    /// writes.
-    private func checksWave(prs: [PRFetch], generation: Int) -> Task<Void, Never> {
-        // Carry each PR alongside its key so the completion step can build a CI banner.
-        let issueByKey = Dictionary(uniqueKeysWithValues: prs.map { ($0.key, $0.issue) })
-        return Task { [weak self] in
-            // Resolve per-repo merge permission first so each PR's gate knows it up front.
-            await self?.hydrateRepoPermissions(prs: prs, generation: generation)
-            let canMergeByKey = await self?.mergePermissions(for: prs) ?? [:]
-            await withTaskGroup(of: (PRCheckKey, PRState).self) { group in
-                var next = 0
-                func schedule() {
-                    guard next < prs.count else { return }
-                    let pr = prs[next]
-                    next += 1
-                    let canMerge = canMergeByKey[pr.key]
-                    group.addTask {
-                        await (
-                            pr.key,
-                            Self.fetchPRState(for: pr.issue, login: pr.login, canMerge: canMerge, using: pr.api)
-                        )
-                    }
-                }
-                for _ in 0..<Self.checksConcurrency {
-                    schedule()
-                }
-                while let (key, state) = await group.next() {
-                    guard let self, self.checksGeneration == generation else { continue }
-                    self.prGates[key] = state.gate
-                    if let checks = state.checks {
-                        // A real observation: diff for a pass/fail banner, then store the result.
-                        if let issue = issueByKey[key] {
-                            self.notifyCheckStatusChange(key: key, pr: issue, newStatus: checks.status)
-                        }
-                        self.prChecks[key] = checks
-                    } else {
-                        // No checks or a failed fetch: clear the decorative dot so a stale green
-                        // can't survive, but leave `lastCheckStatus` untouched — wiping it would
-                        // let a transient error swallow the next real pass→fail transition (bug #3).
-                        self.prChecks[key] = nil
-                    }
-                    schedule()
-                }
-            }
-        }
     }
 }

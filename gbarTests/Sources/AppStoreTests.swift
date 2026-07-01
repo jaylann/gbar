@@ -93,6 +93,28 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.lastErrorMessage)
     }
 
+    func testApproveForwardsReviewBody() async throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+        let pr = try item(SearchIssue.stub(id: 1, number: 42))
+
+        await store.approve(pr, message: "  LGTM  ")
+
+        // The message is trimmed before it's forwarded as the review body.
+        XCTAssertEqual(fake.recorder.approvals, [.init(repo: "octo/repo", number: 42, body: "LGTM")])
+    }
+
+    func testApproveWithBlankMessageSendsNoBody() async throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+        let pr = try item(SearchIssue.stub(id: 1, number: 42))
+
+        await store.approve(pr, message: "   ")
+
+        // A whitespace-only message posts a plain approval (nil body), not an empty string.
+        XCTAssertEqual(fake.recorder.approvals, [.init(repo: "octo/repo", number: 42, body: nil)])
+    }
+
     func testApproveErrorSetsMessage() async throws {
         struct Boom: Error {}
         var fake = FakeGitHubAPI()
@@ -256,7 +278,8 @@ final class AppStoreTests: XCTestCase {
     func testDeriveGateMergeableStates() {
         func mergeable(_ state: String, canMerge: Bool?, draft: Bool = false, prState: String = "open") -> Bool {
             let detail = PullRequestDetail.stub(state: prState, mergeableState: state, draft: draft)
-            return AppStore.deriveGate(detail: detail, reviews: [], login: "octocat", canMerge: canMerge).mergeable
+            let mergeInfo = canMerge.map { RepoMergeInfo(canMerge: $0, allowedMethods: MergeMethod.allCases) }
+            return AppStore.deriveGate(detail: detail, reviews: [], login: "octocat", mergeInfo: mergeInfo).mergeable
         }
         // Clean-ish states with push access → mergeable.
         XCTAssertTrue(mergeable("clean", canMerge: true))
@@ -281,7 +304,9 @@ final class AppStoreTests: XCTestCase {
     func testDeriveGateAlreadyApprovedLatestWins() {
         let detail = PullRequestDetail.stub()
         func approved(_ reviews: [PullRequestReview], login: String = "octocat") -> Bool {
-            AppStore.deriveGate(detail: detail, reviews: reviews, login: login, canMerge: true).alreadyApproved
+            let mergeInfo = RepoMergeInfo(canMerge: true, allowedMethods: MergeMethod.allCases)
+            return AppStore.deriveGate(detail: detail, reviews: reviews, login: login, mergeInfo: mergeInfo)
+                .alreadyApproved
         }
         // A single approval by the viewer.
         XCTAssertTrue(approved([.stub(login: "octocat", state: "APPROVED")]))
@@ -304,6 +329,32 @@ final class AppStoreTests: XCTestCase {
         ]))
         // Another user's approval is irrelevant to the viewer's gate.
         XCTAssertFalse(approved([.stub(login: "someone-else", state: "APPROVED")]))
+    }
+
+    func testDeriveGateAllowedMergeMethods() {
+        let detail = PullRequestDetail.stub(mergeableState: "clean")
+        func methods(_ mergeInfo: RepoMergeInfo?) -> [MergeMethod] {
+            AppStore.deriveGate(detail: detail, reviews: [], login: "octocat", mergeInfo: mergeInfo).allowedMergeMethods
+        }
+        // The gate carries through whatever methods the repo allows, in canonical order.
+        XCTAssertEqual(methods(RepoMergeInfo(canMerge: true, allowedMethods: [.squash])), [.squash])
+        XCTAssertEqual(
+            methods(RepoMergeInfo(canMerge: true, allowedMethods: [.merge, .rebase])),
+            [.merge, .rebase]
+        )
+        // Not yet hydrated → optimistic: offer all three.
+        XCTAssertEqual(methods(nil), MergeMethod.allCases)
+    }
+
+    func testRepositoryInfoAllowedMergeMethodsFromFlags() {
+        // Only squash enabled → only squash.
+        XCTAssertEqual(
+            RepositoryInfo.stub(push: true, allowMerge: false, allowSquash: true, allowRebase: false)
+                .allowedMergeMethods,
+            [.squash]
+        )
+        // All enabled → all three, in canonical order.
+        XCTAssertEqual(RepositoryInfo.stub(push: true).allowedMergeMethods, [.merge, .squash, .rebase])
     }
 
     func testRefreshHydratesGate() async throws {

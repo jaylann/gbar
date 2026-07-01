@@ -2,10 +2,20 @@ import Foundation
 
 /// Which GitHub merge strategy to use when merging a pull request. Raw values match the
 /// `merge_method` strings the REST API expects.
-enum MergeMethod: String {
+enum MergeMethod: String, CaseIterable {
     case merge
     case squash
     case rebase
+
+    /// Button text for the inline merge-method picker. Text (not an SF Symbol) reads clearer
+    /// for three near-synonymous strategies, and the row is the only consumer.
+    var label: String {
+        switch self {
+        case .merge: "Merge"
+        case .squash: "Squash"
+        case .rebase: "Rebase"
+        }
+    }
 }
 
 /// The GitHub data surface gbar needs. A protocol so the store can be tested against a
@@ -22,8 +32,8 @@ protocol GitHubAPI: Sendable {
     func reviews(repo: String, number: Int) async throws -> [PullRequestReview]
     /// Fetch a repository's detail (`owner/name` slug) — used for the viewer's permissions.
     func repository(repo: String) async throws -> RepositoryInfo
-    /// Submit an approving review on a pull request.
-    func approvePullRequest(repo: String, number: Int) async throws
+    /// Submit an approving review on a pull request, with an optional review body.
+    func approvePullRequest(repo: String, number: Int, body: String?) async throws
     /// Merge a pull request using the given strategy.
     func mergePullRequest(repo: String, number: Int, method: MergeMethod) async throws
     /// Mark a notification thread as read.
@@ -91,11 +101,13 @@ struct GitHubClient: GitHubAPI {
         return try Self.decoder.decode(RepositoryInfo.self, from: data)
     }
 
-    func approvePullRequest(repo: String, number: Int) async throws {
+    func approvePullRequest(repo: String, number: Int, body: String?) async throws {
+        var payload = ["event": "APPROVE"]
+        if let body, !body.isEmpty { payload["body"] = body }
         let request = try makeRequest(
             path: "repos/\(repo)/pulls/\(number)/reviews",
             method: "POST",
-            body: ["event": "APPROVE"]
+            body: payload
         )
         _ = try await execute(request)
     }
