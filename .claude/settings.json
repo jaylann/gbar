@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(just:*)",
+      "Bash(tuist:*)",
+      "Bash(swiftformat:*)",
+      "Bash(swiftlint:*)",
+      "Bash(xcodebuild:*)",
+      "Bash(xcrun:*)",
+      "Bash(xcode-build-server:*)",
+      "Bash(./scripts/make-dmg.sh:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh issue view:*)",
+      "Bash(gh issue list:*)",
+      "Bash(gh release view:*)",
+      "Bash(gh release list:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./Tuist/Config/Debug.xcconfig)",
+      "Read(./Tuist/Config/Release.xcconfig)"
+    ]
+  }
+}

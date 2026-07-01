@@ -1,0 +1,23 @@
+* text=auto eol=lf
+
+# Treat common binaries as binary (no diff/merge munging).
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.woff binary
+*.woff2 binary
+
+# Keep generated lockfiles out of diffs/merges noise where helpful.
+*.lock -diff
+
+# Union-merge the generated Xcode project file so two branches that both touch
+# it merge instead of conflicting. (Tuist regenerates it, but if you ever commit
+# a .pbxproj this avoids noise.)
+*.pbxproj merge=union
+
+# Treat Swift as text with Swift-aware diff hunks.
+*.swift text diff=swift

@@ -1,0 +1,28 @@
+name: require milestone
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review, demilestoned]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    # Only gate promotion PRs into main; day-to-day PRs into stage don't need a milestone.
+    if: ${{ github.event.pull_request.base.ref == 'main' }}
+    steps:
+      - name: PR must have a milestone
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MS=$(gh pr view ${{ github.event.pull_request.number }} \
+                 --repo ${{ github.repository }} \
+                 --json milestone -q '.milestone.title // empty')
+          if [[ -z "$MS" ]]; then
+            echo "::error::No milestone set on this PR. Use 'gh pr edit <num> --milestone vX.Y.Z' or set one in the GitHub UI."
+            exit 1
+          fi
+          echo "milestone: $MS"

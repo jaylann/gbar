@@ -1,0 +1,100 @@
+name: release
+
+# Release flow:
+#   1. Do your work on `stage`.
+#   2. Promote `stage` → `main` via a PR (that's the "release the stage branch" action).
+#   3. This workflow runs on push to `main`: it reads marketingVersion/buildNumber from
+#      Project.swift and, if tag v<version> doesn't exist yet, creates the tag + GitHub
+#      release, then builds a .dmg and uploads it to that release. Finally it fast-forwards
+#      `stage` from `main`.
+#
+# Bump `marketingVersion` in Project.swift before promoting to cut a new release.
+# You can also trigger a build manually with "Run workflow".
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      created: ${{ steps.check.outputs.exists == 'false' }}
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read version from Project.swift
+        id: version
+        run: |
+          VERSION=$(grep -oE 'marketingVersion = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
+          BUILD=$(grep -oE 'buildNumber = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [[ -z "$VERSION" ]]; then echo "::error::no marketingVersion in Project.swift"; exit 1; fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "build=$BUILD" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether tag exists
+        id: check
+        run: |
+          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "tag ${{ steps.version.outputs.tag }} already exists — skipping"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create tag + release
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.email "release-bot@users.noreply.github.com"
+          git config user.name "gbar release bot"
+          git tag -a "${{ steps.version.outputs.tag }}" \
+            -m "Release ${{ steps.version.outputs.tag }} (build ${{ steps.version.outputs.build }})"
+          git push origin "${{ steps.version.outputs.tag }}"
+          gh release create "${{ steps.version.outputs.tag }}" \
+            --title "${{ steps.version.outputs.tag }}" \
+            --target main \
+            --generate-notes
+
+      - name: Sync stage to main
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          git fetch origin stage
+          git checkout stage
+          git merge origin/main --no-edit
+          git push origin stage
+
+  dmg:
+    needs: tag
+    if: needs.tag.outputs.created == 'true'
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.tag.outputs.tag }}
+
+      - name: Install tools
+        run: brew install tuist just
+
+      - name: Build DMG
+        id: build
+        run: echo "path=$(./scripts/make-dmg.sh dist)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload DMG to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.tag.outputs.tag }}" "${{ steps.build.outputs.path }}" --clobber

@@ -1,0 +1,13 @@
+[files]
+extend-exclude = [
+  "*.lock",
+  "*.svg",
+  "*.min.*",
+  "dist/",
+  "build/",
+  ".git/",
+]
+
+[default.extend-words]
+# Add project-specific false positives here, e.g.:
+# gbar = "gbar"

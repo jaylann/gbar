@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- App Sandbox: required for Mac App Store & good hygiene for a menu-bar app. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Outbound HTTPS to the GitHub API (and Enterprise hosts). -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+</dict>
+</plist>

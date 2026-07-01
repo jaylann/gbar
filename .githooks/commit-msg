@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Conventional Commits validator. Wire with: git config core.hooksPath .githooks
+# Pattern: <type>(<scope>)?!?: <subject>  (<=72 chars, lowercase start, no trailing period)
+set -eu
+
+MSG_FILE="$1"
+FIRST_LINE="$(sed -n '1p' "$MSG_FILE")"
+
+# Allow git-generated messages (merges, reverts, fixup/squash, amends).
+case "$FIRST_LINE" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*) exit 0 ;;
+esac
+
+PATTERN='^(feat|fix|chore|docs|refactor|test|perf|style|ci|build|revert)(\([a-z0-9._-]+\))?!?: [^A-Z].{0,71}$'
+
+if printf '%s' "$FIRST_LINE" | grep -Eq "$PATTERN"; then
+  exit 0
+fi
+
+cat >&2 <<'EOF'
+✗ Commit message is not a Conventional Commit.
+
+  Format:  <type>(<scope>)?: <subject>
+  Example: feat(auth): add device-flow login
+
+  type   one of: feat fix chore docs refactor test perf style ci build revert
+  scope  optional, lowercase kebab-case in parens
+  subject lowercase start, no trailing period, <=72 chars total on line 1
+  breaking change: add ! after type/scope, e.g. feat(api)!: drop v1
+
+Bypass (discouraged): git commit --no-verify
+EOF
+exit 1

@@ -1,0 +1,16 @@
+version: 2
+updates:
+  # Keep GitHub Actions pinned versions fresh.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+  # Swift Package Manager deps pulled in via Tuist (Tuist/Package.swift). Uncomment
+  # once external SPM packages are added.
+  # - package-ecosystem: swift
+  #   directory: "/"
+  #   schedule: { interval: weekly }
+  #   groups: { deps: { patterns: ["*"] } }

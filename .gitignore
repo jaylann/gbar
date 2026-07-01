@@ -1,0 +1,59 @@
+# Xcode
+*.xcodeproj
+*.xcworkspace
+!default.xcworkspace
+xcuserdata/
+*.moved-aside
+DerivedData/
+.swiftpm/
+*.ipa
+*.dSYM.zip
+*.dSYM
+build/
+
+# Tuist
+Derived/
+Tuist/.build/
+.tuist-state/
+.tuist-version
+graph.png
+
+# Dependencies (SPM)
+.build/
+spm-packages/
+
+# macOS
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Materialized Tuist build config (gitignored — generated from *.template / env;
+# the *.template files ARE committed)
+Tuist/Config/Debug.xcconfig
+Tuist/Config/Release.xcconfig
+
+# Claude
+.claude/settings.local.json
+.claude/worktrees/
+
+# Release artifacts
+dist/
+
+# Logs & temp
+*.log
+/tmp/
+
+# Test output
+TestResults/
+*.xcresult
+
+# Coverage
+*.lcov
+coverage/
+
+# sourcekit-lsp build server (swift-lsp plugin) — machine-specific absolute paths
+buildServer.json
+.bsp/

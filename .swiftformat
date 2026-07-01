@@ -1,0 +1,81 @@
+# SwiftFormat — strict, opinionated config for gbar.
+# Run: swiftformat .            (apply)
+#      swiftformat --lint .     (check, no writes — CI)
+
+# Language
+--swiftversion 6.0
+
+# Indentation
+--indent 4
+--tabwidth unspecified
+--smarttabs enabled
+--indentcase false
+--ifdef no-indent
+
+# Line length & wrapping
+--maxwidth 120
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--wrapconditions after-first
+--wrapreturntype if-multiline
+--wrapternary default
+--closingparen balanced
+--funcattributes prev-line
+--typeattributes prev-line
+--varattributes same-line
+
+# Whitespace
+--trimwhitespace always
+--linebreaks lf
+--emptybraces no-space
+--ranges no-space
+--operatorfunc spaced
+
+# Imports
+--importgrouping testable-bottom
+
+# Self / redundancy
+--self remove
+--selfrequired
+--redundanttype inferred
+--shortoptionals always
+--stripunusedargs closure-only
+--extension-acl on-declarations
+
+# Headers & docs
+--header strip
+--doccomments preserve
+
+# Misc style
+--commas always
+--decimalgrouping ignore
+--hexgrouping ignore
+--exponentcase lowercase
+--patternlet hoist
+--semicolons never
+--trailingclosures
+--voidtype void
+--xcodeindentation enabled
+
+# Disabled — we want these but with caveats handled by SwiftLint or manually
+--disable redundantSelf
+--disable redundantInternal
+
+# Enabled (default) but call out the important ones for clarity
+--enable blankLinesAtStartOfScope,blankLinesAtEndOfScope,blankLinesBetweenScopes
+--enable consecutiveBlankLines,consecutiveSpaces,duplicateImports
+--enable enumNamespaces,initCoderUnavailable,leadingDelimiters,linebreakAtEndOfFile
+--enable modifierOrder,numberFormatting,preferKeyPath,redundantBackticks
+--enable redundantBreak,redundantClosure,redundantExtensionACL,redundantFileprivate
+--enable redundantGet,redundantInit,redundantLetError,redundantNilInit,redundantObjc
+--enable redundantParens,redundantPattern,redundantRawValues,redundantReturn
+--enable redundantVoidReturnType
+--enable spaceAroundBraces,spaceAroundBrackets,spaceAroundComments,spaceAroundGenerics
+--enable spaceAroundOperators,spaceAroundParens,spaceInsideBraces,spaceInsideBrackets
+--enable spaceInsideComments,spaceInsideGenerics,spaceInsideParens,strongOutlets
+--enable strongifiedSelf,trailingCommas,trailingSpace,typeSugar,unusedArguments
+--enable wrapEnumCases,wrapMultilineStatementBraces,wrapSwitchCases,yodaConditions
+--enable sortImports,sortSwitchCases,sortDeclarations
+
+--exclude DerivedData,.build,Derived,Tuist/.build,build,**/*.generated.swift

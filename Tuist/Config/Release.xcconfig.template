@@ -1,0 +1,10 @@
+// Copy to Release.xcconfig and fill in release-build values.
+// The real Release.xcconfig is gitignored — `just bootstrap` materializes it from this
+// template (placeholder values), and CI overwrites it from env vars in
+// ci_scripts/ci_post_clone.sh. Keys here feed $(...) references in Project.swift.
+//
+// GH_OAUTH_CLIENT_ID: leave blank for a self-host build (the app prompts for a client
+// ID / PAT at runtime). The paid/hosted build ships with the licensor's client ID.
+// GH_API_BASE_URL: default GitHub API host; override for GitHub Enterprise.
+GH_OAUTH_CLIENT_ID =
+GH_API_BASE_URL = https:/$()/api.github.com
