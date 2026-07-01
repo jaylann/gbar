@@ -39,6 +39,11 @@ private struct TooltipModifier: ViewModifier {
                         .allowsHitTesting(false)
                 }
             }
+            // Don't let a pending dwell fire after the row scrolls away or the tab switches.
+            .onDisappear {
+                dwellTask?.cancel()
+                isVisible = false
+            }
     }
 
     private var label: some View {

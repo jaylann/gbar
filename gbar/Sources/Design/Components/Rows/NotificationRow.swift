@@ -58,7 +58,9 @@ struct NotificationRow: View {
             }
 
             Spacer(minLength: Theme.Spacing.sm)
-            UnseenDot(isUnseen: model.isUnread)
+            if model.isUnread {
+                UnseenDot(isUnseen: true)
+            }
         }
     }
 }

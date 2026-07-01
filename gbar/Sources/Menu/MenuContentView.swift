@@ -59,10 +59,12 @@ struct MenuContentView: View {
             VStack(alignment: .leading, spacing: 0) {
                 if store.isSignedIn {
                     header
-                    if searchActive {
+                    // Search/filters only make sense over a loaded, filterable list — keep them
+                    // off the loading skeleton, the auth-expired prompt, and the empty store.
+                    if showsFilters, searchActive {
                         searchRow
                     }
-                    if selectedTab == .prs {
+                    if showsFilters, selectedTab == .prs {
                         chipsRow
                     }
                     Divider()
@@ -75,9 +77,9 @@ struct MenuContentView: View {
                 Divider()
                 footer
             }
-            // Give the popover a comfortable minimum body so a short list still opens tall,
-            // instead of collapsing to just a couple of rows; `maxHeight` on the container caps it.
-            .frame(minHeight: 560)
+            // Give the signed-in popover a comfortable minimum body so a short list still opens
+            // tall; the sign-in prompt sizes to its content (`maxHeight` on the container caps both).
+            .frame(minHeight: store.isSignedIn ? 560 : nil)
         }
         // Skip if the background poll loop is already refreshing, so opening the menu doesn't
         // overlap an in-flight fetch (see AppStore.startPolling). Note(#10): refresh() itself
@@ -95,6 +97,7 @@ struct MenuContentView: View {
                 Image(systemName: searchActive ? "xmark" : "magnifyingglass")
             }
             .buttonStyle(GBButtonStyle(variant: .icon))
+            .disabled(!showsFilters)
             .gbTooltip(searchActive ? "Close search" : "Search", edge: .bottom)
             Button {
                 Task { await store.refresh() }
@@ -183,9 +186,7 @@ struct MenuContentView: View {
 
     @ViewBuilder
     private var tabContent: some View {
-        if store.sessionExpired {
-            ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
-        } else if !store.hasLoaded {
+        if !store.hasLoaded {
             // Fill the taller body from the top so the skeleton reads like the list it stands
             // in for, rather than a short block floating mid-popover.
             LoadingView(rows: 8)
@@ -201,6 +202,18 @@ struct MenuContentView: View {
         }
     }
 
+    /// The whole store has no loaded results — used to decide whether an error/auth-expired
+    /// state should take over the tab (only when there's nothing to keep on screen).
+    private var storeIsEmpty: Bool {
+        store.sections.allSatisfy(\.items.isEmpty) && store.notifications.isEmpty
+    }
+
+    /// Show the search field and PR filter chips only when there's a loaded, filterable list —
+    /// not during first load, an expired session, or an empty store.
+    private var showsFilters: Bool {
+        store.hasLoaded && !store.sessionExpired && !storeIsEmpty
+    }
+
     private var prList: some View {
         let groups = filteredSections(store.prSections) { matchesSearch($0.item) && prPredicate($0) }
         return tabScaffold(isEmpty: groups.isEmpty) {
@@ -209,7 +222,7 @@ struct MenuContentView: View {
             ForEach(groups, id: \.section.id) { group in
                 Section {
                     ForEach(group.items) { item in
-                        PRRowItem(store: store, item: item, checks: store.prChecks[item.id]) { url in openURL(url) }
+                        row(item)
                     }
                 } header: {
                     SectionHeader(title: group.section.title, count: group.items.count)
@@ -226,7 +239,7 @@ struct MenuContentView: View {
             ForEach(groups, id: \.section.id) { group in
                 Section {
                     ForEach(group.items) { item in
-                        issueRow(item)
+                        row(item)
                     }
                 } header: {
                     SectionHeader(title: group.section.title, count: group.items.count)
@@ -246,9 +259,10 @@ struct MenuContentView: View {
         }
     }
 
-    /// The shared per-tab frame: a quiet error banner over the scrolling list when there's
-    /// content (a partial failure must never blank a populated tab), an `ErrorStateView` when
-    /// empty *because* the last refresh failed, otherwise the tab's own empty state.
+    /// The shared per-tab frame. When the tab has rows, show them under a quiet error banner
+    /// (a partial failure — or an expired session while data is still on screen — must never
+    /// blank a populated tab). A full-screen auth/error state takes over only when the whole
+    /// store is empty, so an unrelated tab's failure can't mask this tab's caught-up state.
     @ViewBuilder
     private func tabScaffold(
         isEmpty: Bool,
@@ -271,7 +285,9 @@ struct MenuContentView: View {
                     .padding(.vertical, Theme.Spacing.xs)
                 }
             }
-        } else if let message = store.lastErrorMessage {
+        } else if storeIsEmpty, store.sessionExpired {
+            ErrorStateView(kind: .authExpired, retryTitle: "Open Settings") { openSettingsWindow() }
+        } else if storeIsEmpty, let message = store.lastErrorMessage {
             ErrorStateView(kind: .generic) { Task { await store.refresh() } }
                 .help(message)
         } else {
@@ -301,7 +317,11 @@ struct MenuContentView: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, Theme.Spacing.xs)
     }
+}
 
+/// Filtering predicates and row builders, split into an extension to keep the primary view
+/// body within the type-length limit.
+extension MenuContentView {
     // MARK: Filtering
 
     /// Apply a per-item predicate to each section and drop the sections left empty, keeping the
@@ -346,6 +366,18 @@ struct MenuContentView: View {
 
     // MARK: Rows
 
+    /// Route by the item itself, not just its section: a section can contain both PRs and
+    /// issues (e.g. a query without `is:pr`/`is:issue`), so PRs always get the CI disclosure +
+    /// Approve/Merge and issues stay read-only — whichever tab the section is routed to.
+    @ViewBuilder
+    private func row(_ item: SearchIssue) -> some View {
+        if item.isPullRequest {
+            PRRowItem(store: store, item: item, checks: store.prChecks[item.id]) { url in openURL(url) }
+        } else {
+            issueRow(item)
+        }
+    }
+
     private func issueRow(_ item: SearchIssue) -> some View {
         Button {
             if let url = URL(string: item.htmlURL) { openURL(url) }
@@ -377,6 +409,11 @@ struct MenuContentView: View {
                 NotificationRow(model: NotificationRow.Model(notification))
             }
             .buttonStyle(.plain)
+            // The visible mark-read button is hover-gated; keep the action reachable via
+            // VoiceOver's actions rotor on the always-present row body.
+            .accessibilityAction(named: "Mark as read") {
+                if notification.unread { Task { await store.markRead(notification) } }
+            }
         })
     }
 
@@ -404,6 +441,10 @@ private struct PRRowItem: View {
     var openURL: (URL) -> Void
 
     @State private var expanded = false
+    @State private var isConfirmingMerge = false
+    /// Guards against duplicate submits from a rapid double-tap. Owned here (not in the
+    /// hover-gated `PRQuickActions`) so it survives the accessory unmounting on hover-out.
+    @State private var isSubmitting = false
 
     /// Leading gutter reserved for the disclosure chevron so PR titles align whether or
     /// not a row has checks to expand.
@@ -411,6 +452,10 @@ private struct PRRowItem: View {
 
     private var checkModels: [CheckRow.Model] {
         checks?.checks ?? []
+    }
+
+    private var prLabel: String {
+        "\(item.repositorySlug) #\(item.number)"
     }
 
     var body: some View {
@@ -421,7 +466,12 @@ private struct PRRowItem: View {
                 // (not nested), so tapping Approve/Merge doesn't also fire the row's open-URL
                 // action. The accessory only takes hits while revealed (see HoverRow).
                 HoverRow(trailingAccessory: {
-                    PRQuickActions(store: store, item: item)
+                    PRQuickActions(
+                        item: item,
+                        isSubmitting: isSubmitting,
+                        onApprove: { submit { await store.approve(item) } },
+                        onMerge: { isConfirmingMerge = true }
+                    )
                 }, content: {
                     Button {
                         if let url = URL(string: item.htmlURL) { openURL(url) }
@@ -429,6 +479,9 @@ private struct PRRowItem: View {
                         PRRow(issue: item, ci: checks?.status)
                     }
                     .buttonStyle(.plain)
+                    // Keep the hover-gated Approve/Merge reachable via VoiceOver's actions rotor.
+                    .accessibilityAction(named: "Approve \(prLabel)") { submit { await store.approve(item) } }
+                    .accessibilityAction(named: "Merge \(prLabel)") { isConfirmingMerge = true }
                 })
             }
             if expanded {
@@ -437,6 +490,34 @@ private struct PRRowItem: View {
                         .padding(.leading, gutter)
                 }
             }
+        }
+        // The dialog lives on the always-mounted row, not on the hover-gated accessory, so
+        // moving the pointer to the dialog (which drops row hover) can't dismiss it mid-choice.
+        .confirmationDialog(
+            "Merge \(prLabel)?",
+            isPresented: $isConfirmingMerge,
+            titleVisibility: .visible
+        ) {
+            Button("Merge commit") { submit { await store.merge(item, method: .merge) } }
+                .accessibilityLabel("Merge commit \(prLabel)")
+            Button("Squash and merge") { submit { await store.merge(item, method: .squash) } }
+                .accessibilityLabel("Squash and merge \(prLabel)")
+            Button("Rebase and merge") { submit { await store.merge(item, method: .rebase) } }
+                .accessibilityLabel("Rebase and merge \(prLabel)")
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
+    }
+
+    /// Run a quick action guarded by `isSubmitting` so a double-tap can't fire it twice.
+    /// `@MainActor`-clean: the flag is only ever read/written on the main actor.
+    private func submit(_ action: @escaping () async -> Void) {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        Task {
+            await action()
+            isSubmitting = false
         }
     }
 
@@ -477,17 +558,15 @@ private struct SignInPromptView: View {
     }
 }
 
-/// Hover-revealed quick actions for a PR row: one-tap Approve (checkmark), and a Merge that
-/// opens a confirmation dialog to pick the strategy (merge is irreversible, so it never fires
-/// on a single click). Icon-only with tooltips; sits in HoverRow's in-flow accessory slot.
+/// Hover-revealed quick actions for a PR row: one-tap Approve (checkmark) and Merge (which
+/// asks the owning row to open the strategy dialog — merge is irreversible, so it never fires
+/// on a single click). Stateless: the submit guard and the dialog live on `PRRowItem` so they
+/// survive this view unmounting when hover ends.
 private struct PRQuickActions: View {
-    let store: AppStore
     let item: SearchIssue
-
-    @State private var isConfirmingMerge = false
-    /// Guards against duplicate submits from a rapid double-tap: while a request is in flight
-    /// both buttons are disabled, so a second tap can't queue another approve/merge.
-    @State private var isSubmitting = false
+    let isSubmitting: Bool
+    var onApprove: () -> Void
+    var onMerge: () -> Void
 
     private var prLabel: String {
         "\(item.repositorySlug) #\(item.number)"
@@ -495,14 +574,14 @@ private struct PRQuickActions: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Button { submit { await store.approve(item) } } label: {
+            Button { onApprove() } label: {
                 Image(systemName: "checkmark")
             }
             .buttonStyle(GBButtonStyle(variant: .secondary))
             .gbTooltip("Approve")
             .accessibilityLabel("Approve \(prLabel)")
 
-            Button { isConfirmingMerge = true } label: {
+            Button { onMerge() } label: {
                 Image(systemName: "arrow.triangle.merge")
             }
             .buttonStyle(GBButtonStyle(variant: .primary))
@@ -510,32 +589,6 @@ private struct PRQuickActions: View {
             .accessibilityLabel("Merge \(prLabel)")
         }
         .disabled(isSubmitting)
-        .confirmationDialog(
-            "Merge \(prLabel)?",
-            isPresented: $isConfirmingMerge,
-            titleVisibility: .visible
-        ) {
-            Button("Merge commit") { submit { await store.merge(item, method: .merge) } }
-                .accessibilityLabel("Merge commit \(prLabel)")
-            Button("Squash and merge") { submit { await store.merge(item, method: .squash) } }
-                .accessibilityLabel("Squash and merge \(prLabel)")
-            Button("Rebase and merge") { submit { await store.merge(item, method: .rebase) } }
-                .accessibilityLabel("Rebase and merge \(prLabel)")
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This can't be undone.")
-        }
-    }
-
-    /// Run a quick action guarded by `isSubmitting` so a double-tap can't fire it twice.
-    /// `@MainActor`-clean: the flag is only ever read/written on the main actor.
-    private func submit(_ action: @escaping () async -> Void) {
-        guard !isSubmitting else { return }
-        isSubmitting = true
-        Task {
-            await action()
-            isSubmitting = false
-        }
     }
 }
 

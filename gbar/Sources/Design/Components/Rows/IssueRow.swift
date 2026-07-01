@@ -31,7 +31,9 @@ struct IssueRow: View {
                 if let login = issue.user?.login {
                     Avatar(login: login, url: issue.user?.avatarURL.flatMap(URL.init))
                 }
-                UnseenDot(isUnseen: isUnseen)
+                if isUnseen {
+                    UnseenDot(isUnseen: true)
+                }
             }
         }
     }

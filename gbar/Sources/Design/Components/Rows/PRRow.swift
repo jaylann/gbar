@@ -40,7 +40,11 @@ struct PRRow: View {
                 if let user = issue.user {
                     Avatar(login: user.login, url: user.avatarURL.flatMap(URL.init))
                 }
-                UnseenDot(isUnseen: isUnseen)
+                // Only occupy trailing space when actually unseen, so seen rows sit flush with
+                // the leading padding rather than reserving an empty dot slot.
+                if isUnseen {
+                    UnseenDot(isUnseen: true)
+                }
             }
         }
     }

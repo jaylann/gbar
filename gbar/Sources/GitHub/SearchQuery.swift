@@ -25,10 +25,14 @@ enum SearchQuery {
             !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
 
-        /// Kind guessed from the query text: `is:issue` reads as issues, everything else
-        /// (including `is:pr` and bare queries) defaults to PRs.
+        /// Kind guessed from the query text. Tokenized (not substring) so a negated
+        /// `-is:issue` doesn't read as an issue query; `is:pr` wins over `is:issue` if both
+        /// appear, and everything else (including bare queries) defaults to PRs.
         var inferredKind: Kind {
-            query.localizedCaseInsensitiveContains("is:issue") ? .issues : .prs
+            let tokens = query.lowercased().split(whereSeparator: \.isWhitespace)
+            if tokens.contains("is:pr") { return .prs }
+            if tokens.contains("is:issue") { return .issues }
+            return .prs
         }
 
         /// The kind to route by: the explicit choice if set, otherwise the inferred one.

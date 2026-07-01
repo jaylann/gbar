@@ -20,6 +20,15 @@ final class SearchQueryTests: XCTestCase {
         XCTAssertEqual(section(query: "IS:ISSUE label:bug").inferredKind, .issues)
     }
 
+    func testInferredKindIgnoresNegatedIssueToken() {
+        // `-is:issue` excludes issues from a PR query — it must not read as an issue query.
+        XCTAssertEqual(section(query: "is:open -is:issue author:@me").inferredKind, .prs)
+    }
+
+    func testInferredKindPrefersPRWhenBothTokensPresent() {
+        XCTAssertEqual(section(query: "is:pr is:issue").inferredKind, .prs)
+    }
+
     func testResolvedKindPrefersExplicitChoiceOverInference() {
         // Query looks like issues, but the user pinned it to PRs — the explicit choice wins.
         XCTAssertEqual(section(query: "is:issue", kind: .prs).resolvedKind, .prs)
