@@ -59,9 +59,10 @@ extension AppStore {
             // proves the token works, so no separate validation round-trip is needed.
             try storeToken(token, account.keychainKey)
             reauthStatus = .idle
-            // Let the immediate refresh recompute the error/expired state from the fresh token —
-            // `expiredAccountID` is owned (private-set) by the main type via `applyErrorState`.
-            await refresh()
+            // Force a fresh refresh so the error/expired state is recomputed from the just-stored
+            // token — coalescing onto an in-flight poll run (built from the old, expired token)
+            // would leave the account marked expired and the Reconnect prompt showing. #10.
+            await refresh(force: true)
         } catch {
             reauthStatus = .failed(AuthErrorCopy.message(for: error))
             Log.auth.error("reconnect failed: \(error.localizedDescription, privacy: .public)")

@@ -371,15 +371,20 @@ extension AppStore {
 // MARK: - Refresh
 
 extension AppStore {
-    /// Refresh every section for every account and merge the results. Accounts are fetched
-    /// concurrently in a `TaskGroup`; the merged data is kept whole and the account filter is
-    /// applied only in the view-facing projections, so switching accounts needs no refetch.
-    func refresh() async {
-        // Single-flight: if a refresh is already running, await it rather than starting a second
-        // one that would interleave at every await point and overwrite the first's partial state.
+    /// Single-flight refresh. Concurrent callers coalesce onto one in-flight run so their
+    /// `@MainActor`-interleaved awaits can't clobber each other's partial state (#10).
+    ///
+    /// Pass `force: true` when the caller has just changed credential/account state that the
+    /// in-flight run was built from a now-stale snapshot of (e.g. `reconnect` after storing a
+    /// fresh token). Force supersedes the in-flight run — cancels it and starts a fresh one —
+    /// rather than coalescing onto a result computed from the old token.
+    func refresh(force: Bool = false) async {
         if let refreshTask {
+            // Force supersedes the stale run (cancel + let it unwind — it drops its writes on
+            // `Task.isCancelled`); otherwise coalesce onto it and return.
+            if force { refreshTask.cancel() }
             await refreshTask.value
-            return
+            if !force { return }
         }
         let task = Task { [weak self] in
             guard let self else { return }
@@ -387,24 +392,28 @@ extension AppStore {
         }
         refreshTask = task
         await task.value
-        refreshTask = nil
+        // Only clear if a newer run (a concurrent `force` refresh) hasn't already replaced ours.
+        if let current = refreshTask, current == task { refreshTask = nil }
     }
 
+    /// Refresh every section for every account and merge the results. Accounts are fetched
+    /// concurrently in a `TaskGroup`; the merged data is kept whole and the account filter is
+    /// applied only in the view-facing projections, so switching accounts needs no refetch.
     private func performRefresh() async {
         await migrateLegacyCredentialIfNeeded()
         guard !accounts.isEmpty else { return }
         isRefreshing = true
         lastErrorMessage = nil
         sessionExpired = false
-        defer {
-            isRefreshing = false
-            hasLoaded = true
-        }
+        defer { isRefreshing = false }
 
         // One API client per account (skipping any whose token has gone missing), reused for
         // both the section load and CI hydration.
         let accountAPIs = currentAccountAPIs()
-        guard !accountAPIs.isEmpty else { return }
+        guard !accountAPIs.isEmpty else {
+            hasLoaded = true
+            return
+        }
 
         let queries = savedQueries
         var loadsByAccount: [Account.ID: AccountLoad] = [:]
@@ -416,6 +425,11 @@ extension AppStore {
                 loadsByAccount[load.account.id] = load
             }
         }
+
+        // Superseded while fetching — sign-out cancelled us, or a `force` refresh replaced us?
+        // Drop our writes instead of clobbering fresher (or signed-out) state, mirroring the
+        // `checksGeneration` staleness guard used for CI hydration.
+        guard !Task.isCancelled else { return }
 
         // Diff against the previous poll and fire banners for new section items / inbox threads
         // before the merged data replaces the store's state. Both read `loadsByAccount` directly
@@ -432,6 +446,7 @@ extension AppStore {
         let apis = Dictionary(uniqueKeysWithValues: accountAPIs.map { ($0.account.id, $0.api) })
         // Kick off CI hydration without awaiting it, so the list shows immediately.
         hydrateChecks(for: sections, apis: apis)
+        hasLoaded = true
     }
 
     private func currentAccountAPIs() -> [(account: Account, api: GitHubAPI)] {
@@ -586,6 +601,10 @@ extension AppStore {
     /// Clear all loaded data and stop polling — shared by "remove last account" and "sign out".
     private func resetSignedOutState() {
         stopPolling()
+        // Cancel any in-flight refresh so its post-fetch writes (and its `hasLoaded = true`) can't
+        // land on the now-signed-out store — it drops them on `Task.isCancelled`. See #10.
+        refreshTask?.cancel()
+        refreshTask = nil
         checksTask?.cancel()
         checksTask = nil
         checksGeneration += 1
