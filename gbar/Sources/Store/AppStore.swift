@@ -8,6 +8,30 @@ struct LoadedSection: Identifiable {
     let items: [SearchIssue]
 }
 
+/// How often the store polls GitHub in the background. Raw value is the interval in seconds;
+/// `.off` (0) disables auto-refresh entirely.
+enum PollInterval: TimeInterval, CaseIterable, Identifiable {
+    case off = 0
+    case s30 = 30
+    case m1 = 60
+    case m5 = 300
+    case m15 = 900
+
+    var id: TimeInterval {
+        rawValue
+    }
+
+    var label: String {
+        switch self {
+        case .off: "Off"
+        case .s30: "30 seconds"
+        case .m1: "1 minute"
+        case .m5: "5 minutes"
+        case .m15: "15 minutes"
+        }
+    }
+}
+
 /// Central app state: who's signed in, where the API lives, and the latest results.
 /// v1 refreshes by polling `/search/issues`; the store is the seam where richer data
 /// sources (checks, notifications, a webhook backend) will attach — see docs/PRODUCT.md.
@@ -30,6 +54,20 @@ final class AppStore {
 
     private static let apiBaseURLKey = "gbar.apiBaseURL"
 
+    /// Background auto-refresh cadence in seconds; 0 disables polling. Changing it restarts
+    /// the poll loop at the new interval. Persisted like `apiBaseURL`.
+    var pollInterval: TimeInterval {
+        didSet {
+            UserDefaults.standard.set(pollInterval, forKey: Self.pollIntervalKey)
+            startPolling()
+        }
+    }
+
+    private static let pollIntervalKey = "gbar.pollInterval"
+
+    /// The single in-flight poll loop, if any. `@MainActor`-isolated like the rest of the store.
+    private var pollTask: Task<Void, Never>?
+
     var isSignedIn: Bool {
         credential != nil
     }
@@ -46,15 +84,26 @@ final class AppStore {
         } else {
             apiBaseURL = AppConfig.defaultAPIBaseURL
         }
+        // Validate the restored value against the known intervals so a corrupt/legacy default
+        // (e.g. a tiny 0.001 that would spin the loop hot) can't reach the poll loop.
+        if UserDefaults.standard.object(forKey: Self.pollIntervalKey) != nil,
+           let stored = PollInterval(rawValue: UserDefaults.standard.double(forKey: Self.pollIntervalKey))
+        {
+            pollInterval = stored.rawValue
+        } else {
+            pollInterval = PollInterval.m1.rawValue
+        }
         if let token = KeychainStore.get(Credential.keychainKey) {
             credential = Credential(kind: .oauth, token: token)
         }
+        startPolling()
     }
 
     func signIn(token: String, kind: Credential.Kind) {
         do {
             try KeychainStore.set(token, for: Credential.keychainKey)
             credential = Credential(kind: kind, token: token)
+            startPolling()
         } catch {
             lastErrorMessage = "Couldn't save credential to Keychain."
             Log.auth.error("keychain save failed: \(error.localizedDescription, privacy: .public)")
@@ -62,10 +111,39 @@ final class AppStore {
     }
 
     func signOut() {
+        stopPolling()
         KeychainStore.remove(Credential.keychainKey)
         credential = nil
         sections = []
         hasLoaded = false
+    }
+
+    /// Start (or restart) the background poll loop. Cancels any existing loop first, so it's
+    /// safe to call on sign-in, launch, and whenever `pollInterval` changes. A no-op when
+    /// signed out or when polling is `.off`.
+    private func startPolling() {
+        pollTask?.cancel()
+        guard isSignedIn, pollInterval > 0 else {
+            pollTask = nil
+            return
+        }
+        pollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self, self.isSignedIn, self.pollInterval > 0 else { return }
+                if !self.isRefreshing { await self.refresh() }
+                let seconds = self.pollInterval
+                do {
+                    try await Task.sleep(for: .seconds(seconds))
+                } catch {
+                    return // cancelled
+                }
+            }
+        }
+    }
+
+    private func stopPolling() {
+        pollTask?.cancel()
+        pollTask = nil
     }
 
     /// Refresh every default section. Kept intentionally simple for v1 — sequential fetch,

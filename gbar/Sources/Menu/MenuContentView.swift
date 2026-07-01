@@ -22,7 +22,10 @@ struct MenuContentView: View {
                 footer
             }
         }
-        .task { if store.isSignedIn { await store.refresh() } }
+        // Skip if the background poll loop is already refreshing, so opening the menu doesn't
+        // overlap an in-flight fetch (see AppStore.startPolling). Note(#10): refresh() itself
+        // has no reentrancy guard, so this is a mitigation, not a hard lock.
+        .task { if store.isSignedIn, !store.isRefreshing { await store.refresh() } }
     }
 
     private var header: some View {
