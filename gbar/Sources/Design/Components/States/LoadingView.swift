@@ -10,7 +10,7 @@ struct SkeletonRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
             bar(width: 12, height: 12)
             VStack(alignment: .leading, spacing: 6) {
                 bar(width: 210, height: 10)

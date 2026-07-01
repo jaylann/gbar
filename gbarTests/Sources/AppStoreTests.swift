@@ -252,6 +252,40 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.badgeCount, 5)
     }
 
+    func testTabCountsRouteSectionsByKind() async throws {
+        var fake = FakeGitHubAPI()
+        // Distinct counts per default query so we can verify PR vs issue routing.
+        fake.resultsByQuery = [
+            "is:open is:pr review-requested:@me": SearchIssue.stubs(count: 3),
+            "is:open is:pr assignee:@me": SearchIssue.stubs(count: 2),
+            "is:open is:pr author:@me": SearchIssue.stubs(count: 11),
+            "is:open is:issue assignee:@me": SearchIssue.stubs(count: 13),
+        ]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        // Three PR sections (3 + 2 + 11) route to PRs; the lone issue section to Issues.
+        XCTAssertEqual(store.prSections.count, 3)
+        XCTAssertEqual(store.issueSections.count, 1)
+        XCTAssertEqual(store.prCount, 16)
+        XCTAssertEqual(store.issueCount, 13)
+    }
+
+    func testUnreadNotificationCountIgnoresReadItems() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [
+            .stub(id: "1", unread: true),
+            .stub(id: "2", unread: false),
+            .stub(id: "3", unread: true),
+        ]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        XCTAssertEqual(store.unreadNotificationCount, 2)
+    }
+
     func testRefreshLoadsNotifications() async throws {
         var fake = FakeGitHubAPI()
         fake.notificationsResult = [

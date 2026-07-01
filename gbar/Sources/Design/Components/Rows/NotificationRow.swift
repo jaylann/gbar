@@ -36,12 +36,11 @@ struct NotificationRow: View {
     let model: Model
 
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
             Image(systemName: model.symbol)
                 .font(Theme.Typography.caption)
                 .foregroundStyle(model.isUnread ? Theme.Palette.link : .secondary)
                 .frame(width: 16)
-                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title)
@@ -59,7 +58,9 @@ struct NotificationRow: View {
             }
 
             Spacer(minLength: Theme.Spacing.sm)
-            UnseenDot(isUnseen: model.isUnread)
+            if model.isUnread {
+                UnseenDot(isUnseen: true)
+            }
         }
     }
 }

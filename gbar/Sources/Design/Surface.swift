@@ -9,7 +9,7 @@ enum Surface {
     /// translucent, so the desktop bleeds through and muddies every color — this solid
     /// (very slightly lifted in dark, so it reads as foreground over the menu bar)
     /// makes the palette render true, like the gallery.
-    static let canvas = Color(light: "FFFFFF", dark: "1F2023")
+    static let canvas = Color(light: "FFFFFF", dark: "18191B")
 
     /// Fill under the row the pointer is over. Barely-there so scanning isn't noisy.
     static let rowHover = Color.primary.opacity(0.06)

@@ -16,6 +16,14 @@ struct DesignGallery: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.xl) {
                 group("Navigation") {
+                    InlineTabBar(
+                        tabs: [
+                            .init(tag: "prs", title: "PRs", count: 86),
+                            .init(tag: "issues", title: "Issues", count: 28),
+                            .init(tag: "inbox", title: "Inbox", count: 50),
+                        ],
+                        selection: $domain
+                    )
                     GBSegmentedControl(
                         segments: [
                             .init(tag: "prs", title: "PRs", symbol: "arrow.triangle.pull", count: 4),
@@ -31,6 +39,49 @@ struct DesignGallery: View {
                         FilterChip(title: "Failing", symbol: "xmark.circle", isOn: $filterFailing)
                     }
                     SearchField(placeholder: "Filter PRs", text: $search)
+                }
+
+                group("Menu shell") {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                        InlineTabBar(
+                            tabs: [
+                                .init(tag: "prs", title: "PRs", count: 3),
+                                .init(tag: "issues", title: "Issues", count: 1),
+                                .init(tag: "inbox", title: "Inbox", count: 2),
+                            ],
+                            selection: $domain
+                        )
+                        SearchField(placeholder: "Filter pull requests", text: $search)
+                        rowStack {
+                            HoverRow { PRRow(issue: .previewOpenPR, ci: .success, isUnseen: true) }
+                            HoverRow { PRRow(issue: .previewDraftPR, ci: .pending) }
+                        }
+                    }
+                }
+
+                group("Row accessory (hover-revealed)") {
+                    rowStack {
+                        // `isFocused` forces the trailing slot open so the pattern is visible
+                        // in the static gallery — live rows reveal it on hover.
+                        HoverRow(
+                            isFocused: true,
+                            trailingAccessory: {
+                                Button {} label: { Image(systemName: "checkmark") }
+                                    .buttonStyle(GBButtonStyle(variant: .icon))
+                            },
+                            content: {
+                                NotificationRow(model: .init(
+                                    id: "acc",
+                                    repo: "jaylann/gbar",
+                                    title: "Mark-as-read lives in the trailing slot",
+                                    reason: .reviewRequested,
+                                    date: Date(timeIntervalSinceNow: -600),
+                                    isUnread: true,
+                                    symbol: "arrow.triangle.pull"
+                                ))
+                            }
+                        )
+                    }
                 }
 
                 group("State badges") {
