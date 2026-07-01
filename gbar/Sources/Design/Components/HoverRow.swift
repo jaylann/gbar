@@ -5,14 +5,33 @@ import SwiftUI
 /// once. Fills `Surface.rowHover` under the pointer and `Surface.selection` + a focus
 /// ring when keyboard-focused. Height and inner padding follow the ambient
 /// `DensityMode`. Motion respects Reduce Motion.
-struct HoverRow<Content: View>: View {
+struct HoverRow<Accessory: View, Content: View>: View {
     /// Driven by keyboard navigation (↑/↓). When true the row reads as "selected".
     var isFocused = false
-    @ViewBuilder var content: () -> Content
+    /// Optional trailing controls (e.g. quick-action buttons) revealed on hover/focus and
+    /// overlaid at the row's trailing edge.
+    private let trailingAccessory: () -> Accessory
+    private let content: () -> Content
+
+    init(
+        isFocused: Bool = false,
+        @ViewBuilder trailingAccessory: @escaping () -> Accessory,
+        @ViewBuilder content: @escaping () -> Content
+    ) {
+        self.isFocused = isFocused
+        self.trailingAccessory = trailingAccessory
+        self.content = content
+    }
 
     @State private var isHovering = false
     @Environment(\.density) private var density
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Reveal the accessory under the pointer or when keyboard-focused, so it's reachable
+    /// without a mouse.
+    private var accessoryVisible: Bool {
+        isHovering || isFocused
+    }
 
     var body: some View {
         content()
@@ -21,6 +40,12 @@ struct HoverRow<Content: View>: View {
             .frame(minHeight: density.rowHeight, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(fill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+            .overlay(alignment: .trailing) {
+                trailingAccessory()
+                    .padding(.trailing, Theme.Spacing.md)
+                    .opacity(accessoryVisible ? 1 : 0)
+                    .allowsHitTesting(accessoryVisible)
+            }
             .overlay {
                 if isFocused {
                     RoundedRectangle(cornerRadius: Theme.Radius.sm)
@@ -36,6 +61,14 @@ struct HoverRow<Content: View>: View {
     private var fill: Color {
         if isFocused { return Surface.selection }
         return isHovering ? Surface.rowHover : .clear
+    }
+}
+
+extension HoverRow where Accessory == EmptyView {
+    /// Convenience for rows without a trailing accessory, so existing `HoverRow { content }`
+    /// call sites keep compiling unchanged.
+    init(isFocused: Bool = false, @ViewBuilder content: @escaping () -> Content) {
+        self.init(isFocused: isFocused, trailingAccessory: { EmptyView() }, content: content)
     }
 }
 

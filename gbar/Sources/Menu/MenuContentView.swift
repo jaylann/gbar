@@ -150,18 +150,26 @@ struct MenuContentView: View {
     }
 
     private func row(_ item: SearchIssue) -> some View {
-        Button {
-            if let url = URL(string: item.htmlURL) { openURL(url) }
-        } label: {
-            HoverRow {
+        // The open-URL button and the quick-action buttons are siblings inside HoverRow (not
+        // nested), so tapping Approve/Merge doesn't also fire the row's open-URL action. The
+        // accessory only takes hits while revealed (see HoverRow.allowsHitTesting).
+        HoverRow(trailingAccessory: {
+            // PR-only: issues keep their plain row.
+            if item.isPullRequest {
+                PRQuickActions(store: store, item: item)
+            }
+        }, content: {
+            Button {
+                if let url = URL(string: item.htmlURL) { openURL(url) }
+            } label: {
                 if item.isPullRequest {
                     PRRow(issue: item)
                 } else {
                     IssueRow(issue: item)
                 }
             }
-        }
-        .buttonStyle(.plain)
+            .buttonStyle(.plain)
+        })
     }
 
     private var footer: some View {
@@ -190,6 +198,40 @@ private struct SignInPromptView: View {
             actionTitle: "Open Settings…",
             action: openSettings
         )
+    }
+}
+
+/// Hover-revealed quick actions for a PR row: one-tap Approve, and a Merge that opens a
+/// confirmation dialog to pick the strategy (merge is irreversible, so it never fires on a
+/// single click). Sits on an opaque chip so it cleanly covers the row content it overlays.
+private struct PRQuickActions: View {
+    @Bindable var store: AppStore
+    let item: SearchIssue
+
+    @State private var isConfirmingMerge = false
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Button("Approve") { Task { await store.approve(item) } }
+                .buttonStyle(GBButtonStyle(variant: .secondary))
+
+            Button("Merge") { isConfirmingMerge = true }
+                .buttonStyle(GBButtonStyle(variant: .primary))
+        }
+        .padding(.horizontal, Theme.Spacing.xs)
+        .background(Surface.canvas, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+        .confirmationDialog(
+            "Merge \(item.repositorySlug) #\(item.number)?",
+            isPresented: $isConfirmingMerge,
+            titleVisibility: .visible
+        ) {
+            Button("Merge commit") { Task { await store.merge(item, method: .merge) } }
+            Button("Squash and merge") { Task { await store.merge(item, method: .squash) } }
+            Button("Rebase and merge") { Task { await store.merge(item, method: .rebase) } }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This can't be undone.")
+        }
     }
 }
 
