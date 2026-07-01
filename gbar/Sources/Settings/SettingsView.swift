@@ -1,8 +1,8 @@
 import SwiftUI
 
-/// Settings: connect an account (device flow or PAT) and point gbar at a GitHub host.
-/// Deliberately minimal for the scaffold — the deeper preferences (saved queries, poll
-/// interval, notifications) attach here as the app grows. See docs/PRODUCT.md.
+/// Settings: connect an account (device flow or PAT), tune the background refresh cadence,
+/// and point gbar at a GitHub host. Deeper preferences (saved queries, notifications) attach
+/// here as the app grows. See docs/PRODUCT.md.
 struct SettingsView: View {
     @Bindable var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -15,6 +15,7 @@ struct SettingsView: View {
     var body: some View {
         Form {
             accountSection
+            refreshSection
             advancedSection
         }
         .formStyle(.grouped)
@@ -42,6 +43,26 @@ struct SettingsView: View {
                 Text(status).font(.caption).foregroundStyle(.secondary)
             }
         }
+    }
+
+    private var refreshSection: some View {
+        Section("Refresh") {
+            Picker("Auto-refresh", selection: pollIntervalBinding) {
+                ForEach(PollInterval.allCases) { option in
+                    Text(option.label).tag(option)
+                }
+            }
+            Text("How often gbar checks GitHub in the background — keeps the badge current while the menu is closed.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var pollIntervalBinding: Binding<PollInterval> {
+        Binding(
+            get: { PollInterval(rawValue: store.pollInterval) ?? .m1 },
+            set: { store.pollInterval = $0.rawValue }
+        )
     }
 
     private var advancedSection: some View {
