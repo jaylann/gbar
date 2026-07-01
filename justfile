@@ -178,8 +178,18 @@ format:
 format-check:
     swiftformat --lint .
 
+# Spellcheck source + docs (crate-ci/typos); auto-discovers _typos.toml. Same tool as CI.
+typos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v typos >/dev/null 2>&1; then
+        echo "typos not installed — run 'mise install' (pinned in .mise.toml)" >&2
+        exit 1
+    fi
+    typos
+
 # Run all lint/format checks (the same set CI runs)
-check: format-check lint
+check: format-check lint typos
 
 # ─── Release ────────────────────────────────────────────────────────
 

@@ -1,3 +1,6 @@
 [tools]
 tuist = "4.195.11"
 swift = "6.0"
+# Spellcheck (crate-ci/typos) — `just check` runs it, matching CI. Keep the version in sync
+# with the `crate-ci/typos@vX.Y.Z` pin in .github/workflows/ci.yml.
+typos = "1.48.0"

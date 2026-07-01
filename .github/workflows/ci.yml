@@ -48,4 +48,5 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Spellcheck
-        uses: crate-ci/typos@master
+        # Pinned to match the typos version in .mise.toml so local `just check` == CI.
+        uses: crate-ci/typos@v1.48.0
