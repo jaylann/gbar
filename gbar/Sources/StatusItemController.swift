@@ -38,6 +38,13 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
         observeBadge()
     }
 
+    /// The status item — not a window — is what keeps this agent app alive. Without this, hiding
+    /// the `SettingsOpener` window (our only `Window` scene) reads as "last window closed" and
+    /// SwiftUI terminates the app right after launch.
+    func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
+        false
+    }
+
     // MARK: Status-item button
 
     /// Re-render the button whenever `badgeCount` changes. `withObservationTracking` fires its
@@ -106,11 +113,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
 
     // MARK: Settings
 
-    /// Open the SwiftUI `Settings` scene from AppKit. `WindowActivator` inside `SettingsView` owns
-    /// the focus + agent-demotion dance once the window appears, however Settings is opened.
+    /// Ask the SwiftUI side to open Settings. On macOS 14+ the Settings scene can only be opened
+    /// from within the scene graph (`@Environment(\.openSettings)`), so route through the hidden
+    /// `SettingsOpener` window rather than a now-defunct `showSettingsWindow:` selector.
     private func openSettings() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        NotificationCenter.default.post(name: .gbarOpenSettings, object: nil)
     }
 }
 
