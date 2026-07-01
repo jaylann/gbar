@@ -45,9 +45,12 @@ enum KeychainStore {
     }
 
     static func remove(_ key: String) {
-        _ = withKeychain { useDataProtection in
-            SecItemDelete(baseQuery(for: key, useDataProtection: useDataProtection) as CFDictionary)
-        }
+        // Purge both keychains unconditionally. A token written by an earlier teamless
+        // (file-based) build must not survive logout once the build is team-signed — there
+        // `withKeychain` never falls back (data-protection delete doesn't return
+        // errSecMissingEntitlement), so a status-gated fallback would leave it behind.
+        SecItemDelete(baseQuery(for: key, useDataProtection: true) as CFDictionary)
+        SecItemDelete(baseQuery(for: key, useDataProtection: false) as CFDictionary)
     }
 
     // MARK: - Helpers

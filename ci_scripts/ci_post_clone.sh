@@ -43,6 +43,7 @@ GH_API_BASE_URL = https:/\$()/${GH_API_HOST_RELEASE:-api.github.com}
 GBAR_CODE_SIGN_STYLE = ${GBAR_CODE_SIGN_STYLE_RELEASE:-Manual}
 GBAR_CODE_SIGN_IDENTITY = ${GBAR_CODE_SIGN_IDENTITY_RELEASE:--}
 GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_RELEASE:-}
+GBAR_ENTITLEMENTS = ${GBAR_ENTITLEMENTS_RELEASE:-gbar/gbar.entitlements}
 EOF
 else
     echo "ci_post_clone.sh: not running in CI — skipping xcconfig materialization"
