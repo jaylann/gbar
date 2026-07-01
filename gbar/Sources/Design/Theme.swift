@@ -120,7 +120,7 @@ enum Theme {
             HStack(spacing: Theme.Spacing.sm) {
                 ForEach(states, id: \.0) { name, color in
                     VStack(spacing: Theme.Spacing.xs) {
-                        RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                        RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
                             .fill(color)
                             .frame(width: 44, height: 44)
                         Text(name).font(Theme.Typography.caption)

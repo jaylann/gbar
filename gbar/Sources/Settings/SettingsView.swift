@@ -1,257 +1,67 @@
 import SwiftUI
 
-/// Settings: manage connected accounts (add via device flow or PAT, each with an optional
-/// host override for Enterprise; remove per account or all at once), tune the background
-/// refresh cadence, and edit saved queries. See docs/PRODUCT.md.
+/// Settings, rebuilt on the app's own design system instead of a native grouped `Form`: a
+/// compact header with the popover's `InlineTabBar` switching between three focused panes —
+/// **Accounts** (add via device flow or PAT, per-account Enterprise host, remove one or all),
+/// **Queries** (edit the menu's saved-search sections), and **General** (background refresh
+/// cadence, notification preferences, build info). See docs/PRODUCT.md.
+///
+/// Hosted in a `.hiddenTitleBar` `Window` (not a `Settings` scene) so `Surface.canvas` fills the
+/// whole window as one seamless surface — the traffic lights float in the `titlebarInset` strip.
 struct SettingsView: View {
     @Bindable var store: AppStore
-    @Environment(\.openURL) private var openURL
 
-    @State private var clientID = AppConfig.bakedClientID ?? ""
-    @State private var patToken = ""
-    /// Optional per-account host override for the account being added (blank = default host).
-    @State private var addHost = ""
-    /// Typed sign-in state, rendered as a loading / error / success line under the add-account
-    /// controls. Replaces the old free-form status string so failures read as actionable copy.
-    @State private var status: AuthStatus = .idle
-    /// Which entry last ran, so the failure state's "Try again" re-runs the right one.
-    @State private var lastAttempt: AuthAttempt?
+    @State private var tab: Tab = .accounts
 
-    /// Typed sign-in status backing the add-account section's inline feedback.
-    private enum AuthStatus: Equatable {
-        case idle
-        case working(String)
-        case failure(String)
-        case success(String)
-
-        var isWorking: Bool {
-            if case .working = self { true } else { false }
-        }
-    }
-
-    /// The add-account entry point a user last used — drives the failure-state retry.
-    private enum AuthAttempt {
-        case deviceFlow
-        case pat
+    private enum Tab: Hashable {
+        case accounts
+        case queries
+        case general
     }
 
     var body: some View {
-        Form {
-            accountsSection
-            addAccountSection
-            if store.isSignedIn {
-                signOutAllSection
-            }
-            refreshSection
-            notificationsSection
-            if store.isSignedIn {
-                SavedQueriesSection(store: store)
-            }
+        VStack(spacing: 0) {
+            header
+            Divider()
+            pane
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .formStyle(.grouped)
-        .frame(width: 460, height: 460)
+        .frame(width: 500, height: 560)
+        .background(Surface.canvas)
         // Owns the whole agent-app activation lifecycle for this window: promote to a
         // regular app + make the window key+main so its text fields accept clicks and
         // typing, then demote back to a no-Dock-icon agent when it actually closes.
         .background(WindowActivator())
     }
 
-    private var accountsSection: some View {
-        Section("Accounts") {
-            if store.accounts.isEmpty {
-                Text("No accounts connected yet.")
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(store.accounts) { account in
-                    accountRow(account)
-                }
-            }
+    /// Left-aligned tabs, the same `InlineTabBar` the popover header uses.
+    private var header: some View {
+        HStack {
+            InlineTabBar(tabs: tabs, selection: $tab)
+            Spacer(minLength: 0)
         }
+        // Below the reserved titlebar band (safe area), the tab bar hugs it: left-aligned,
+        // no top gap, so it reads as one surface with the traffic-light strip above.
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.bottom, Theme.Spacing.sm)
     }
 
-    private func accountRow(_ account: Account) -> some View {
-        HStack(spacing: Theme.Spacing.sm) {
-            Avatar(login: account.login, url: account.avatarImageURL, size: .medium)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(account.login)
-                Text(hostLabel(account.apiBaseURL))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(role: .destructive) {
-                store.removeAccount(id: account.id)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .buttonStyle(.borderless)
-            .help("Remove \(account.login)")
-            .accessibilityLabel("Remove \(account.login)")
-        }
+    /// Counts ride quietly beside the labels (hidden at zero) so the tab bar doubles as a
+    /// glance at how many accounts and saved queries are configured.
+    private var tabs: [InlineTabBar<Tab>.Tab] {
+        [
+            .init(tag: .accounts, title: "Accounts", count: store.accounts.isEmpty ? nil : store.accounts.count),
+            .init(tag: .queries, title: "Queries", count: store.savedQueries.isEmpty ? nil : store.savedQueries.count),
+            .init(tag: .general, title: "General"),
+        ]
     }
 
-    private var addAccountSection: some View {
-        Section("Add account") {
-            TextField("Host (API base URL)", text: $addHost, prompt: Text(store.apiBaseURL.absoluteString))
-                .textFieldStyle(.roundedBorder)
-            Text(
-                "Leave blank for the default host. Override for GitHub Enterprise, e.g. https://ghe.example.com/api/v3"
-            )
-            .font(.caption)
-            .foregroundStyle(.secondary)
-            TextField("OAuth App client ID", text: $clientID)
-            Button("Sign in with GitHub") {
-                lastAttempt = .deviceFlow
-                Task { await startDeviceFlow() }
-            }
-            .disabled(clientID.isEmpty || status.isWorking)
-            Divider()
-            SecureField("…or paste a personal access token", text: $patToken)
-            Button("Add token") {
-                lastAttempt = .pat
-                Task { await addToken() }
-            }
-            .disabled(patToken.isEmpty || status.isWorking)
-            statusView
-        }
-    }
-
-    /// Inline sign-in feedback: a spinner while working, a red actionable error with a retry
-    /// affordance on failure, or a green confirmation on success.
     @ViewBuilder
-    private var statusView: some View {
-        switch status {
-        case .idle:
-            EmptyView()
-        case let .working(message):
-            HStack(spacing: 6) {
-                ProgressView().controlSize(.small)
-                Text(message)
-            }
-            .font(.caption)
-            .foregroundStyle(.secondary)
-        case let .failure(message):
-            VStack(alignment: .leading, spacing: 6) {
-                Label(message, systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                Button("Try again") { retry() }
-                    .controlSize(.small)
-                    .disabled(status.isWorking)
-            }
-        case let .success(message):
-            Label(message, systemImage: "checkmark.circle.fill")
-                .font(.caption)
-                .foregroundStyle(.green)
-        }
-    }
-
-    private var signOutAllSection: some View {
-        Section {
-            Button("Sign out of all accounts", role: .destructive) { store.signOutAll() }
-        }
-    }
-
-    /// Short, human-readable host for an account's API base URL.
-    private func hostLabel(_ url: URL) -> String {
-        guard let host = url.host else { return url.absoluteString }
-        return host == "api.github.com" ? "github.com" : host
-    }
-
-    /// The host a newly-added account should use: the override field if filled, else the
-    /// app default. Falls back to the default on an unparsable override.
-    private var resolvedAddURL: URL {
-        let trimmed = addHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return store.apiBaseURL }
-        return url
-    }
-
-    private func resetInputs() {
-        patToken = ""
-        addHost = ""
-    }
-
-    private var refreshSection: some View {
-        Section("Refresh") {
-            Picker("Auto-refresh", selection: pollIntervalBinding) {
-                ForEach(PollInterval.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-            Text("How often gbar checks GitHub in the background — keeps the badge current while the menu is closed.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var notificationsSection: some View {
-        Section("Notifications") {
-            Toggle("Enable notifications", isOn: $store.notificationsEnabled)
-            Group {
-                Toggle("New notifications", isOn: $store.notifyInbox)
-                Toggle("New PRs & issues", isOn: $store.notifySections)
-                Toggle("CI status changes", isOn: $store.notifyChecks)
-            }
-            .disabled(!store.notificationsEnabled)
-            Text("Native banners for new items and CI pass/fail on your PRs. Click one to open it in the browser.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-        }
-    }
-
-    private var pollIntervalBinding: Binding<PollInterval> {
-        Binding(
-            get: { PollInterval(rawValue: store.pollInterval) ?? .m1 },
-            set: { store.pollInterval = $0.rawValue }
-        )
-    }
-
-    private func startDeviceFlow() async {
-        status = .working("Requesting a device code…")
-        let host = resolvedAddURL
-        // Persist the (public) client ID on the store so a later 401 can reconnect this account
-        // in place without the user re-entering it.
-        store.oauthClientID = clientID
-        let client = DeviceFlowClient(
-            clientID: clientID,
-            webBaseURL: AppConfig.webBaseURL(forAPI: host)
-        )
-        do {
-            let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
-            status = .working("Enter code \(code.userCode) in the browser window…")
-            if let url = URL(string: code.verificationURI) { openURL(url) }
-            let token = try await client.pollForToken(code)
-            try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
-            status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
-            resetInputs()
-        } catch {
-            status = .failure(AuthErrorCopy.message(for: error))
-        }
-    }
-
-    /// Validate + add a pasted PAT. `addAccount` calls `currentUser()`, so a bad/expired token
-    /// fails here with a clear message instead of silently on the first background poll.
-    private func addToken() async {
-        status = .working("Validating token…")
-        // Trim so a token copied with a trailing newline/spaces doesn't get rejected as invalid.
-        let token = patToken.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            try await store.addAccount(token: token, kind: .personalAccessToken, apiBaseURL: resolvedAddURL)
-            status = .success("Added \(store.accounts.last.map { "@\($0.login)" } ?? "").")
-            resetInputs()
-        } catch {
-            status = .failure(AuthErrorCopy.message(for: error))
-        }
-    }
-
-    /// Re-run whichever add-account entry the user last attempted. The PAT field is preserved
-    /// until a success, so a PAT retry still has its token; the host/client-ID fields likewise
-    /// persist for a device-flow retry.
-    private func retry() {
-        switch lastAttempt {
-        case .deviceFlow: Task { await startDeviceFlow() }
-        case .pat: Task { await addToken() }
-        case .none: break
+    private var pane: some View {
+        switch tab {
+        case .accounts: AccountsPane(store: store)
+        case .queries: QueriesPane(store: store)
+        case .general: GeneralPane(store: store)
         }
     }
 }
@@ -280,22 +90,42 @@ private struct WindowActivator: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         private var didActivate = false
+        private var willCloseToken: (any NSObjectProtocol)?
 
         func activateIfNeeded(_ view: NSView) {
             guard !didActivate, let window = view.window else { return }
             didActivate = true
             NSApp.setActivationPolicy(.regular)
             NSApp.activate(ignoringOtherApps: true)
+            // The hidden titlebar removes the usual drag handle; let the canvas move the window.
+            window.isMovableByWindowBackground = true
+            // Don't let macOS restore this window (visible, with a Dock icon) on next launch —
+            // it's only ever meant to appear on an explicit status-item request.
+            window.isRestorable = false
             window.makeKeyAndOrderFront(nil)
-            // Scoped to this window's close; the token needs no cleanup because the
-            // observation dies with the window it's bound to.
-            NotificationCenter.default.addObserver(
+            // Demote back to a no-Dock agent when the window closes. A block-based observer
+            // isn't freed when its `object` deallocates, so unregister it once it has fired.
+            willCloseToken = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification,
                 object: window,
                 queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = NSApp.setActivationPolicy(.accessory)
+                    self?.removeWillCloseObserver()
+                }
             }
+        }
+
+        private func removeWillCloseObserver() {
+            willCloseToken.map(NotificationCenter.default.removeObserver)
+            willCloseToken = nil
         }
     }
 }
+
+#if DEBUG
+#Preview("Settings") {
+    SettingsView(store: AppStore())
+}
+#endif

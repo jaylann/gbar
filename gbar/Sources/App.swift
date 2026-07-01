@@ -14,26 +14,32 @@ struct GbarApp: App {
 
     var body: some Scene {
         // A tiny, permanently-hidden window that keeps a view in the scene graph so
-        // `@Environment(\.openSettings)` resolves — the only reliable way to open the Settings
-        // scene from our AppKit status item on macOS 14+, where the old `showSettingsWindow:`
-        // selector no longer works. Must be declared *before* `Settings`.
+        // `@Environment(\.openWindow)` resolves — the only reliable way to open the Settings
+        // window from our AppKit status item. Must be declared *before* the Settings window.
         Window("", id: "gbar.settingsOpener") {
             SettingsOpener()
         }
         .windowResizability(.contentSize)
         .defaultSize(width: 1, height: 1)
 
-        Settings {
+        // A plain `Window` (not a `Settings` scene) so `.hiddenTitleBar` applies: it drops the
+        // vibrancy titlebar material that a `Settings` scene forces on and tints wallpaper-side,
+        // letting `Surface.canvas` fill the whole window for one seamless surface. `⌘,` is lost
+        // but irrelevant — this `LSUIElement` agent app opens Settings from the status item only.
+        Window("gbar Settings", id: "gbar.settings") {
             SettingsView(store: appDelegate.store)
         }
+        .windowStyle(.hiddenTitleBar)
+        .windowResizability(.contentSize)
+        .defaultPosition(.center)
     }
 }
 
-/// Invisible helper living in the scene graph: hides its own window on launch, then opens Settings
-/// whenever the status item posts `.gbarOpenSettings`. `WindowActivator` inside `SettingsView` owns
-/// the focus + agent-demotion dance once the window appears.
+/// Invisible helper living in the scene graph: hides its own window on launch, then opens the
+/// Settings window whenever the status item posts `.gbarOpenSettings`. `WindowActivator` inside
+/// `SettingsView` owns the focus + agent-demotion dance once the window appears.
 private struct SettingsOpener: View {
-    @Environment(\.openSettings) private var openSettings
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Color.clear
@@ -42,7 +48,7 @@ private struct SettingsOpener: View {
             .onReceive(NotificationCenter.default.publisher(for: .gbarOpenSettings)) { _ in
                 NSApp.setActivationPolicy(.regular)
                 NSApp.activate(ignoringOtherApps: true)
-                openSettings()
+                openWindow(id: "gbar.settings")
             }
     }
 }
