@@ -27,6 +27,9 @@ struct PRRowItem: View {
     @State private var isSubmitting = false
     @FocusState private var approveFocused: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Matches the idle `HoverRow`'s min height so morphing to the inline controls doesn't
+    /// change the row's height (which would nudge the whole list up/down).
+    @Environment(\.density) private var density
 
     /// Leading gutter reserved for the disclosure chevron so PR titles align whether or
     /// not a row has checks to expand.
@@ -73,7 +76,6 @@ struct PRRowItem: View {
                 disclosure
                 actionArea
             }
-            .animation(Motion.respecting(reduceMotion, Motion.spring), value: actionMode)
             if expanded {
                 ForEach(checkModels) { model in
                     HoverRow { CheckRow(model: model) }
@@ -84,7 +86,7 @@ struct PRRowItem: View {
     }
 
     /// The morphing middle region: the normal row + hover actions when idle, or an inline
-    /// merge-method picker / approve composer that slides in over the title.
+    /// merge-method picker / approve composer that replaces it.
     @ViewBuilder
     private var actionArea: some View {
         switch actionMode {
@@ -99,7 +101,7 @@ struct PRRowItem: View {
                     showApprove: showApprove,
                     showMerge: showMerge,
                     onApprove: { enterApprove() },
-                    onMerge: { actionMode = .merge }
+                    onMerge: { setMode(.merge) }
                 )
             }, content: {
                 Button {
@@ -115,11 +117,10 @@ struct PRRowItem: View {
                         Button("Approve \(prLabel)") { enterApprove() }
                     }
                     if showMerge {
-                        Button("Merge \(prLabel)") { actionMode = .merge }
+                        Button("Merge \(prLabel)") { setMode(.merge) }
                     }
                 }
             })
-            .transition(.opacity)
         case .merge:
             MergeMethodBar(
                 methods: allowedMergeMethods,
@@ -130,36 +131,50 @@ struct PRRowItem: View {
                     submit {
                         await store.merge(item, method: method)
                         submittingMethod = nil
-                        actionMode = .idle
+                        setMode(.idle)
                     }
                 },
-                onCancel: { actionMode = .idle }
+                onCancel: { setMode(.idle) }
             )
             .padding(.horizontal, Theme.Spacing.md)
-            .frame(maxWidth: .infinity)
-            .transition(.move(edge: .trailing).combined(with: .opacity))
+            .frame(maxWidth: .infinity, minHeight: density.rowHeight, alignment: .trailing)
+            .transition(.scale(scale: 0.7, anchor: .trailing).combined(with: .opacity))
         case .approve:
-            ApproveComposer(
-                message: $approveMessage,
-                isSubmitting: isSubmitting,
-                focus: $approveFocused,
-                onApprove: { runApprove() },
-                onCancel: {
-                    approveMessage = ""
-                    actionMode = .idle
-                }
-            )
+            HStack(spacing: Theme.Spacing.sm) {
+                // A hidden state badge reserves exactly the leading space PRRow gives its own
+                // badge, so the field's text lines up with the PR title above it.
+                StateBadge(state: GitHubState(issue: issue), size: .small)
+                    .hidden()
+                    .accessibilityHidden(true)
+                ApproveComposer(
+                    message: $approveMessage,
+                    isSubmitting: isSubmitting,
+                    focus: $approveFocused,
+                    onApprove: { runApprove() },
+                    onCancel: {
+                        approveMessage = ""
+                        setMode(.idle)
+                    }
+                )
+            }
             .padding(.horizontal, Theme.Spacing.md)
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: .infinity, minHeight: density.rowHeight)
             .transition(.move(edge: .trailing).combined(with: .opacity))
         }
+    }
+
+    /// Change the inline action mode with the morph animation. Driven here (not via an ambient
+    /// `.animation(value:)` modifier) so the animation only fires on an explicit action — an
+    /// ambient modifier makes the `LazyVStack` animate rows as it recycles them mid-scroll.
+    private func setMode(_ mode: RowActionMode) {
+        withAnimation(Motion.respecting(reduceMotion, Motion.spring)) { actionMode = mode }
     }
 
     /// Enter the approve composer and focus its field. `approveFocused` is also set in the
     /// composer's `onAppear` (the reliable moment the field is mounted); setting it here too
     /// covers the case where the field is already present.
     private func enterApprove() {
-        actionMode = .approve
+        setMode(.approve)
         approveFocused = true
     }
 
@@ -168,7 +183,7 @@ struct PRRowItem: View {
         submit {
             await store.approve(item, message: approveMessage)
             approveMessage = ""
-            actionMode = .idle
+            setMode(.idle)
         }
     }
 
@@ -185,7 +200,7 @@ struct PRRowItem: View {
 
     @ViewBuilder
     private var disclosure: some View {
-        if !checkModels.isEmpty {
+        if actionMode == .idle, !checkModels.isEmpty {
             Button {
                 withAnimation(Motion.spring) { expanded.toggle() }
             } label: {
@@ -246,9 +261,10 @@ private struct PRQuickActions: View {
     }
 }
 
-/// The inline merge-method picker the row morphs into when Merge is tapped: one button per
-/// strategy the repo actually enables. A single tap merges immediately (confirmed — no second
-/// step), so only one method carries the accent (`.primary`); the rest are `.secondary`.
+/// The expanded merge-method picker: one button per strategy the repo enables. The whole group
+/// scales out from the trailing edge (where the Merge button sat), so it reads as that button
+/// expanding into the methods — buttons stay full-size, so labels never truncate mid-morph.
+/// One tap merges immediately (confirmed — no second step). The first method carries the accent.
 private struct MergeMethodBar: View {
     let methods: [MergeMethod]
     /// The method whose merge is in flight (drives that button's spinner), or nil.
@@ -259,18 +275,15 @@ private struct MergeMethodBar: View {
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Text("Merge as")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(.secondary)
             ForEach(Array(methods.enumerated()), id: \.element) { index, method in
                 Button(method.label) { onSelect(method) }
                     .buttonStyle(GBButtonStyle(
                         variant: index == 0 ? .primary : .secondary,
                         isLoading: submittingMethod == method
                     ))
+                    .fixedSize()
                     .accessibilityLabel("\(method.label) and merge")
             }
-            Spacer(minLength: Theme.Spacing.xs)
             Button { onCancel() } label: {
                 Image(systemName: "xmark")
             }
@@ -282,9 +295,9 @@ private struct MergeMethodBar: View {
     }
 }
 
-/// The inline approval composer the row morphs into when Approve is tapped: a comment field
-/// (pre-focused, styled like `SearchField`) plus Approve / cancel buttons. Submitting with an
-/// empty body is allowed — it posts a plain approval.
+/// The inline approval composer the row morphs into when Approve is tapped: a bare, underlined
+/// comment field (no fill, so it reads as part of the row) plus Approve / cancel buttons.
+/// Submitting with an empty body is allowed — it posts a plain approval.
 private struct ApproveComposer: View {
     @Binding var message: String
     let isSubmitting: Bool
@@ -299,10 +312,15 @@ private struct ApproveComposer: View {
                 .font(Theme.Typography.caption)
                 .focused(focus)
                 .onSubmit { onApprove() }
-                .padding(.horizontal, Theme.Spacing.sm)
                 .frame(maxWidth: .infinity)
                 .frame(height: 26)
-                .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+                // Just an underline — accented while focused — so the field feels inline rather
+                // than a boxed control.
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(focus.wrappedValue ? Theme.Palette.accent : Surface.hairline)
+                        .frame(height: 1)
+                }
 
             Button { onApprove() } label: {
                 Image(systemName: "checkmark")
@@ -319,10 +337,10 @@ private struct ApproveComposer: View {
             .accessibilityLabel("Cancel approval")
         }
         .disabled(isSubmitting)
-        // The field is only mounted once the row morphs to `.approve`; focus it here (the
-        // reliable moment) so the caret lands without a click. The menu-bar panel is key, so
-        // it receives keystrokes (see `SearchField`).
-        .onAppear { focus.wrappedValue = true }
+        // The field is only mounted once the row morphs to `.approve`; focus it on the next
+        // runloop tick (after the morph settles) so the caret reliably lands without a click.
+        // The menu-bar panel is key, so it receives keystrokes (see `SearchField`).
+        .onAppear { DispatchQueue.main.async { focus.wrappedValue = true } }
     }
 }
 
