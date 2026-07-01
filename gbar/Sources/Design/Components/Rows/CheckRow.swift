@@ -16,10 +16,9 @@ struct CheckRow: View {
     let model: Model
 
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
             CIStatusIndicator(status: model.status)
                 .frame(width: 16)
-                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.workflow)

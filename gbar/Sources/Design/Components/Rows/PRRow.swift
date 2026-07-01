@@ -17,9 +17,8 @@ struct PRRow: View {
     }
 
     var body: some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.sm) {
+        HStack(alignment: .center, spacing: Theme.Spacing.sm) {
             StateBadge(state: state, size: .small)
-                .padding(.top, 1)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(issue.title)

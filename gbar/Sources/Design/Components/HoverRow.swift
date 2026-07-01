@@ -8,8 +8,9 @@ import SwiftUI
 struct HoverRow<Accessory: View, Content: View>: View {
     /// Driven by keyboard navigation (↑/↓). When true the row reads as "selected".
     var isFocused = false
-    /// Optional trailing controls (e.g. quick-action buttons) revealed on hover/focus and
-    /// overlaid at the row's trailing edge.
+    /// Optional trailing controls (e.g. quick-action buttons) revealed on hover/focus. They
+    /// live in the layout flow, so the row content shrinks to make room rather than being
+    /// overlaid — the trailing metadata slides aside as the accessory morphs in.
     private let trailingAccessory: () -> Accessory
     private let content: () -> Content
 
@@ -34,28 +35,38 @@ struct HoverRow<Accessory: View, Content: View>: View {
     }
 
     var body: some View {
-        content()
-            .padding(.horizontal, Theme.Spacing.md)
-            .padding(.vertical, density.rowVerticalPadding)
-            .frame(minHeight: density.rowHeight, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(fill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
-            .overlay(alignment: .trailing) {
+        HStack(spacing: 0) {
+            content()
+                .frame(maxWidth: .infinity, alignment: .leading)
+            if hasAccessory, accessoryVisible {
                 trailingAccessory()
-                    .padding(.trailing, Theme.Spacing.md)
-                    .opacity(accessoryVisible ? 1 : 0)
-                    .allowsHitTesting(accessoryVisible)
+                    .padding(.leading, Theme.Spacing.sm)
+                    // Slide in from the trailing edge as the content makes room, so the reveal
+                    // reads as one morph rather than a panel dropped on top of the text.
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
             }
-            .overlay {
-                if isFocused {
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm)
-                        .strokeBorder(Surface.focusRing, lineWidth: 1)
-                }
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.vertical, density.rowVerticalPadding)
+        .frame(minHeight: density.rowHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(fill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        .overlay {
+            if isFocused {
+                RoundedRectangle(cornerRadius: Theme.Radius.sm)
+                    .strokeBorder(Surface.focusRing, lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
-            .onHover { isHovering = $0 }
-            .animation(Motion.respecting(reduceMotion, Motion.hover), value: isHovering)
-            .animation(Motion.respecting(reduceMotion, Motion.hover), value: isFocused)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.sm))
+        .onHover { isHovering = $0 }
+        .animation(Motion.respecting(reduceMotion, Motion.spring), value: isHovering)
+        .animation(Motion.respecting(reduceMotion, Motion.spring), value: isFocused)
+    }
+
+    /// Skip the accessory slot entirely for the `EmptyView` convenience init, so plain rows
+    /// never reserve space or jitter on hover.
+    private var hasAccessory: Bool {
+        Accessory.self != EmptyView.self
     }
 
     private var fill: Color {

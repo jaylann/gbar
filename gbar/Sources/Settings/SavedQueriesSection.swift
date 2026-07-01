@@ -40,8 +40,32 @@ struct SavedQueriesSection: View {
                 }
             }
             SearchField(placeholder: "is:open is:pr review-requested:@me", text: section.query)
+            HStack(spacing: Theme.Spacing.sm) {
+                Picker("Tab", selection: section.kind) {
+                    Text("Auto").tag(SearchQuery.Section.Kind?.none)
+                    Text("PRs").tag(SearchQuery.Section.Kind?.some(.prs))
+                    Text("Issues").tag(SearchQuery.Section.Kind?.some(.issues))
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                // "Auto" routes by the query text — show where it lands so the choice is legible.
+                if section.wrappedValue.kind == nil {
+                    Text("→ \(kindLabel(section.wrappedValue.resolvedKind)) tab")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 0)
+            }
         }
         .padding(.vertical, Theme.Spacing.xs)
+    }
+
+    private func kindLabel(_ kind: SearchQuery.Section.Kind) -> String {
+        switch kind {
+        case .prs: "PRs"
+        case .issues: "Issues"
+        }
     }
 
     /// A saved query needs both a title and a query to be useful; whitespace-only counts

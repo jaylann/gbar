@@ -6,6 +6,8 @@ struct LoadedSection: Identifiable {
     let id: String
     let title: String
     let items: [SearchIssue]
+    /// Which tab the section renders under, carried over from `SearchQuery.Section.resolvedKind`.
+    let kind: SearchQuery.Section.Kind
 }
 
 /// The rolled-up CI status for one PR plus its per-check detail rows, hydrated lazily
@@ -122,6 +124,31 @@ final class AppStore {
         return sections.filter { actionable.contains($0.id) }.reduce(0) { $0 + $1.items.count }
     }
 
+    /// Loaded sections routed to the PRs tab.
+    var prSections: [LoadedSection] {
+        sections.filter { $0.kind == .prs }
+    }
+
+    /// Loaded sections routed to the Issues tab.
+    var issueSections: [LoadedSection] {
+        sections.filter { $0.kind == .issues }
+    }
+
+    /// Total PR-section items — the count shown on the PRs tab.
+    var prCount: Int {
+        prSections.reduce(0) { $0 + $1.items.count }
+    }
+
+    /// Total issue-section items — the count shown on the Issues tab.
+    var issueCount: Int {
+        issueSections.reduce(0) { $0 + $1.items.count }
+    }
+
+    /// Unread notifications — the count shown on the Notifications tab.
+    var unreadNotificationCount: Int {
+        notifications.filter(\.unread).count
+    }
+
     init() {
         if let stored = UserDefaults.standard.string(forKey: Self.apiBaseURLKey), let url = URL(string: stored) {
             apiBaseURL = url
@@ -186,7 +213,7 @@ final class AppStore {
     /// Append a fresh, empty saved query for the user to fill in. The UUID id keeps it
     /// distinct from the baseline sections (so badge/actionable semantics are unaffected).
     func addSavedQuery() {
-        savedQueries.append(SearchQuery.Section(id: UUID().uuidString, title: "", query: ""))
+        savedQueries.append(SearchQuery.Section(id: UUID().uuidString, title: "", query: "", kind: nil))
     }
 
     func deleteSavedQuery(at offsets: IndexSet) {
@@ -388,7 +415,7 @@ final class AppStore {
     private func hydrate(section: SearchQuery.Section, using api: GitHubAPI) async -> LoadedSection? {
         do {
             let items = try await api.searchIssues(section.query)
-            return LoadedSection(id: section.id, title: section.title, items: items)
+            return LoadedSection(id: section.id, title: section.title, items: items, kind: section.resolvedKind)
         } catch {
             if case .http(401) = error as? GitHubClient.ClientError {
                 sessionExpired = true
@@ -466,7 +493,12 @@ extension AppStore {
     /// Drop an item (by id) from every loaded section — used for optimistic UI after a merge.
     private func removeItem(id: Int) {
         sections = sections.map { section in
-            LoadedSection(id: section.id, title: section.title, items: section.items.filter { $0.id != id })
+            LoadedSection(
+                id: section.id,
+                title: section.title,
+                items: section.items.filter { $0.id != id },
+                kind: section.kind
+            )
         }
     }
 }
