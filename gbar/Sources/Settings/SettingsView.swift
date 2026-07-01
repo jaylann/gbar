@@ -65,7 +65,10 @@ struct SettingsView: View {
         isWorking = true
         status = "Requesting a device code…"
         defer { isWorking = false }
-        let client = DeviceFlowClient(clientID: clientID)
+        let client = DeviceFlowClient(
+            clientID: clientID,
+            webBaseURL: AppConfig.webBaseURL(forAPI: store.apiBaseURL)
+        )
         do {
             let code = try await client.requestDeviceCode(scopes: ["repo", "notifications"])
             status = "Enter code \(code.userCode) in the browser window…"
