@@ -7,8 +7,14 @@ struct GbarApp: App {
     @State private var store = AppStore()
 
     var body: some Scene {
-        MenuBarExtra("gbar", systemImage: "chevron.left.forwardslash.chevron.right") {
+        MenuBarExtra {
             MenuContentView(store: store)
+        } label: {
+            if store.badgeCount > 0 {
+                Label("\(store.badgeCount)", systemImage: "chevron.left.forwardslash.chevron.right")
+            } else {
+                Image(systemName: "chevron.left.forwardslash.chevron.right")
+            }
         }
         .menuBarExtraStyle(.window)
 
