@@ -90,6 +90,7 @@ private struct WindowActivator: NSViewRepresentable {
     @MainActor
     final class Coordinator {
         private var didActivate = false
+        private var willCloseToken: (any NSObjectProtocol)?
 
         func activateIfNeeded(_ view: NSView) {
             guard !didActivate, let window = view.window else { return }
@@ -98,16 +99,27 @@ private struct WindowActivator: NSViewRepresentable {
             NSApp.activate(ignoringOtherApps: true)
             // The hidden titlebar removes the usual drag handle; let the canvas move the window.
             window.isMovableByWindowBackground = true
+            // Don't let macOS restore this window (visible, with a Dock icon) on next launch —
+            // it's only ever meant to appear on an explicit status-item request.
+            window.isRestorable = false
             window.makeKeyAndOrderFront(nil)
-            // Scoped to this window's close; the token needs no cleanup because the
-            // observation dies with the window it's bound to.
-            NotificationCenter.default.addObserver(
+            // Demote back to a no-Dock agent when the window closes. A block-based observer
+            // isn't freed when its `object` deallocates, so unregister it once it has fired.
+            willCloseToken = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification,
                 object: window,
                 queue: .main
-            ) { _ in
-                MainActor.assumeIsolated { _ = NSApp.setActivationPolicy(.accessory) }
+            ) { [weak self] _ in
+                MainActor.assumeIsolated {
+                    _ = NSApp.setActivationPolicy(.accessory)
+                    self?.removeWillCloseObserver()
+                }
             }
+        }
+
+        private func removeWillCloseObserver() {
+            willCloseToken.map(NotificationCenter.default.removeObserver)
+            willCloseToken = nil
         }
     }
 }
