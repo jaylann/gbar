@@ -36,8 +36,9 @@ enum AppConfig {
         if host == "api.github.com" {
             return URL(string: "\(scheme)://github.com") ?? fallback
         }
-        // Enterprise: keep scheme + host, drop the /api(/v3) path.
-        return URL(string: "\(scheme)://\(host)") ?? fallback
+        // Enterprise: keep scheme + host (+ port), drop the /api(/v3) path.
+        let port = components.port.map { ":\($0)" } ?? ""
+        return URL(string: "\(scheme)://\(host)\(port)") ?? fallback
     }
 
     private static func value(for key: String) -> String? {
