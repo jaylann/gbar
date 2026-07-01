@@ -22,6 +22,10 @@ STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
 
 echo "==> generating project" >&2
+# Materialize + backfill the gitignored xcconfigs before Tuist reads them, so a fresh CI
+# checkout has them and existing ones gain any new keys (notably GBAR_ENTITLEMENTS — an
+# undefined value makes CODE_SIGN_ENTITLEMENTS empty and ships an app with no entitlements).
+just _xcconfig
 tuist install
 tuist generate --no-open
 

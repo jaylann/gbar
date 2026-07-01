@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Entitlements for a TEAM-signed build (local dev with a DEVELOPMENT_TEAM, or a
+	     Developer ID / notarized release). Selected via GBAR_ENTITLEMENTS in the xcconfig;
+	     the teamless/ad-hoc default uses gbar.entitlements (no keychain group), because the
+	     keychain-access-groups entitlement requires a provisioning profile and would fail an
+	     ad-hoc build. -->
+	<!-- App Sandbox: required for Mac App Store & good hygiene for a menu-bar app. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- Outbound HTTPS to the GitHub API (and Enterprise hosts). -->
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<!-- Keychain access group for the data-protection keychain (KeychainStore). Its presence
+	     makes Xcode provision a profile, which injects application-identifier so the
+	     data-protection keychain works with no ACL prompt. $(AppIdentifierPrefix) expands to
+	     "<TeamID>." for the signing team. -->
+	<key>keychain-access-groups</key>
+	<array>
+		<string>$(AppIdentifierPrefix)dev.lanfermann.gbar</string>
+	</array>
+</dict>
+</plist>
