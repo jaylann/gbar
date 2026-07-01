@@ -1,8 +1,8 @@
 name: ci
 
-# CI gate for gbar: lint (SwiftFormat + SwiftLint) → build (compile the macOS app) →
-# typos. The unit-test suite runs locally (`just test`) — hosted macOS runners are slow
-# and menu-bar UI tests are flaky — but CI still *compiles* the app so a broken build
+# CI gate for gbar: lint (`just check` = SwiftFormat + SwiftLint + typos) → build (compile
+# the macOS app). The unit-test suite runs locally (`just test`) — hosted macOS runners are
+# slow and menu-bar UI tests are flaky — but CI still *compiles* the app so a broken build
 # never merges. Ad-hoc signing (CODE_SIGN_IDENTITY = -) needs no secrets on CI.
 
 on:
@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Install tools
-        run: brew install swiftformat swiftlint tuist just
+        run: brew install swiftformat swiftlint tuist just typos-cli
       - name: Generate project
         run: just gen
       - name: Lint checks
@@ -41,12 +41,3 @@ jobs:
         run: just gen
       - name: Build (Debug, macOS)
         run: just build
-
-  typos:
-    runs-on: ubuntu-latest
-    timeout-minutes: 3
-    steps:
-      - uses: actions/checkout@v5
-      - name: Spellcheck
-        # Pinned to match the typos version in .mise.toml so local `just check` == CI.
-        uses: crate-ci/typos@v1.48.0
