@@ -18,6 +18,7 @@ final class AppStore {
     private(set) var sections: [LoadedSection] = []
     var isRefreshing = false
     var lastErrorMessage: String?
+    var sessionExpired = false
 
     /// GitHub API base — defaults to the build's configured host, overridable for Enterprise.
     var apiBaseURL: URL {
@@ -63,6 +64,7 @@ final class AppStore {
         guard let credential else { return }
         isRefreshing = true
         lastErrorMessage = nil
+        sessionExpired = false
         defer { isRefreshing = false }
 
         let client = GitHubClient(baseURL: apiBaseURL, token: credential.token)
@@ -72,7 +74,12 @@ final class AppStore {
                 let items = try await client.searchIssues(section.query)
                 loaded.append(LoadedSection(id: section.id, title: section.title, items: items))
             } catch {
-                lastErrorMessage = "Failed to load \(section.title)."
+                if case .http(401) = error as? GitHubClient.ClientError {
+                    sessionExpired = true
+                    lastErrorMessage = "Session expired — reconnect in Settings."
+                } else {
+                    lastErrorMessage = "Failed to load \(section.title)."
+                }
                 Log.network
                     .error(
                         "search failed for \(section.id, privacy: .public): \(error.localizedDescription, privacy: .public)"
