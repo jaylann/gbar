@@ -62,6 +62,9 @@ struct FakeGitHubAPI: GitHubAPI {
     /// When set, only `notifications()` throws this error — section queries still succeed.
     /// Lets tests exercise the best-effort guarantee (a flaky inbox never blanks sections).
     var notificationsError: Error?
+    /// When set, only the mutating actions (approve/merge) throw — search still succeeds.
+    /// Lets a test populate the store via a real refresh, then fail just the action.
+    var actionError: Error?
     /// Captures side-effecting calls (mark-as-read, approve, merge) for assertions.
     var recorder = CallRecorder()
 
@@ -84,12 +87,14 @@ struct FakeGitHubAPI: GitHubAPI {
     func approvePullRequest(repo: String, number: Int) async throws {
         recorder.recordApprove(repo: repo, number: number)
         if let error { throw error }
+        if let actionError { throw actionError }
     }
 
     /// Records the merge, then throws `error` if one is injected so error paths are testable.
     func mergePullRequest(repo: String, number: Int, method: MergeMethod) async throws {
         recorder.recordMerge(repo: repo, number: number, method: method)
         if let error { throw error }
+        if let actionError { throw actionError }
     }
 
     func markNotificationRead(threadID: String) async throws {

@@ -205,32 +205,59 @@ private struct SignInPromptView: View {
 /// confirmation dialog to pick the strategy (merge is irreversible, so it never fires on a
 /// single click). Sits on an opaque chip so it cleanly covers the row content it overlays.
 private struct PRQuickActions: View {
-    @Bindable var store: AppStore
+    let store: AppStore
     let item: SearchIssue
 
     @State private var isConfirmingMerge = false
+    /// Guards against duplicate submits from a rapid double-tap: while a request is in flight
+    /// both buttons are disabled, so a second tap can't queue another approve/merge.
+    @State private var isSubmitting = false
+
+    private var prLabel: String {
+        "\(item.repositorySlug) #\(item.number)"
+    }
 
     var body: some View {
         HStack(spacing: Theme.Spacing.xs) {
-            Button("Approve") { Task { await store.approve(item) } }
+            Button("Approve") { submit { await store.approve(item) } }
                 .buttonStyle(GBButtonStyle(variant: .secondary))
+                .accessibilityLabel("Approve \(prLabel)")
 
             Button("Merge") { isConfirmingMerge = true }
                 .buttonStyle(GBButtonStyle(variant: .primary))
+                .accessibilityLabel("Merge \(prLabel)")
         }
+        .disabled(isSubmitting)
         .padding(.horizontal, Theme.Spacing.xs)
         .background(Surface.canvas, in: RoundedRectangle(cornerRadius: Theme.Radius.md))
+        // Consume taps across the whole chip so clicks in the spacing/padding gaps don't fall
+        // through to the underlying full-width open-URL button and open the PR.
+        .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.md))
         .confirmationDialog(
-            "Merge \(item.repositorySlug) #\(item.number)?",
+            "Merge \(prLabel)?",
             isPresented: $isConfirmingMerge,
             titleVisibility: .visible
         ) {
-            Button("Merge commit") { Task { await store.merge(item, method: .merge) } }
-            Button("Squash and merge") { Task { await store.merge(item, method: .squash) } }
-            Button("Rebase and merge") { Task { await store.merge(item, method: .rebase) } }
+            Button("Merge commit") { submit { await store.merge(item, method: .merge) } }
+                .accessibilityLabel("Merge commit \(prLabel)")
+            Button("Squash and merge") { submit { await store.merge(item, method: .squash) } }
+                .accessibilityLabel("Squash and merge \(prLabel)")
+            Button("Rebase and merge") { submit { await store.merge(item, method: .rebase) } }
+                .accessibilityLabel("Rebase and merge \(prLabel)")
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This can't be undone.")
+        }
+    }
+
+    /// Run a quick action guarded by `isSubmitting` so a double-tap can't fire it twice.
+    /// `@MainActor`-clean: the flag is only ever read/written on the main actor.
+    private func submit(_ action: @escaping () async -> Void) {
+        guard !isSubmitting else { return }
+        isSubmitting = true
+        Task {
+            await action()
+            isSubmitting = false
         }
     }
 }

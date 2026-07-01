@@ -108,6 +108,45 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    func testMergeErrorKeepsItemInSections() async throws {
+        struct Boom: Error {}
+        var fake = FakeGitHubAPI()
+        // Search succeeds so the store is populated; only the merge action fails.
+        fake.defaultResult = SearchIssue.stubs(count: 2)
+        fake.actionError = Boom()
+        let store = try makeStore(api: fake)
+        await store.refresh()
+        let target = try XCTUnwrap(store.sections.first?.items.first)
+
+        await store.merge(target, method: .merge)
+
+        XCTAssertNotNil(store.lastErrorMessage)
+        // A failed merge must NOT remove the row: the target is still present.
+        XCTAssertTrue(store.sections.contains { section in section.items.contains { $0.id == target.id } })
+    }
+
+    func testMergeUnauthorizedSetsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.error = GitHubClient.ClientError.http(401)
+        let store = try makeStore(api: fake)
+
+        await store.merge(SearchIssue.stub(id: 1, number: 42), method: .merge)
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
+    }
+
+    func testApproveUnauthorizedSetsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.error = GitHubClient.ClientError.http(401)
+        let store = try makeStore(api: fake)
+
+        await store.approve(SearchIssue.stub(id: 1, number: 42))
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
+    }
+
     func testBadgeCountSumsOnlyActionableSections() async throws {
         var fake = FakeGitHubAPI()
         // Distinct counts per query so we can verify which sections contribute.
