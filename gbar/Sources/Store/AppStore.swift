@@ -43,6 +43,9 @@ final class AppStore {
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
+    /// True once at least one refresh has completed — lets the UI tell "first load"
+    /// (show a skeleton) apart from "loaded and genuinely empty" (show caught-up).
+    private(set) var hasLoaded = false
 
     /// GitHub API base — defaults to the build's configured host, overridable for Enterprise.
     var apiBaseURL: URL {
@@ -112,6 +115,7 @@ final class AppStore {
         KeychainStore.remove(Credential.keychainKey)
         credential = nil
         sections = []
+        hasLoaded = false
     }
 
     /// Start (or restart) the background poll loop. Cancels any existing loop first, so it's
@@ -149,7 +153,10 @@ final class AppStore {
         isRefreshing = true
         lastErrorMessage = nil
         sessionExpired = false
-        defer { isRefreshing = false }
+        defer {
+            isRefreshing = false
+            hasLoaded = true
+        }
 
         let client = GitHubClient(baseURL: apiBaseURL, token: credential.token)
         var loaded: [LoadedSection] = []
