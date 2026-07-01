@@ -236,6 +236,110 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.prChecks[key(300)])
     }
 
+    // MARK: - Action gate derivation
+
+    func testDeriveGateMergeableStates() {
+        func mergeable(_ state: String, canMerge: Bool?, draft: Bool = false, prState: String = "open") -> Bool {
+            let detail = PullRequestDetail.stub(state: prState, mergeableState: state, draft: draft)
+            return AppStore.deriveGate(detail: detail, reviews: [], login: "octocat", canMerge: canMerge).mergeable
+        }
+        // Clean-ish states with push access → mergeable.
+        XCTAssertTrue(mergeable("clean", canMerge: true))
+        XCTAssertTrue(mergeable("unstable", canMerge: true))
+        XCTAssertTrue(mergeable("has_hooks", canMerge: true))
+        // Unknown permission → optimistic (still shown).
+        XCTAssertTrue(mergeable("clean", canMerge: nil))
+        // No push access → hidden even when GitHub would allow the merge.
+        XCTAssertFalse(mergeable("clean", canMerge: false))
+        // Blocked / dirty / behind → not actually mergeable.
+        XCTAssertFalse(mergeable("blocked", canMerge: true))
+        XCTAssertFalse(mergeable("dirty", canMerge: true))
+        XCTAssertFalse(mergeable("behind", canMerge: true))
+        // Indeterminate state (GitHub still computing after a push) → optimistic, stays shown.
+        XCTAssertTrue(mergeable("unknown", canMerge: true))
+        // Draft or closed → never mergeable, even while indeterminate.
+        XCTAssertFalse(mergeable("clean", canMerge: true, draft: true))
+        XCTAssertFalse(mergeable("clean", canMerge: true, prState: "closed"))
+        XCTAssertFalse(mergeable("unknown", canMerge: true, draft: true))
+    }
+
+    func testDeriveGateAlreadyApprovedLatestWins() {
+        let detail = PullRequestDetail.stub()
+        func approved(_ reviews: [PullRequestReview], login: String = "octocat") -> Bool {
+            AppStore.deriveGate(detail: detail, reviews: reviews, login: login, canMerge: true).alreadyApproved
+        }
+        // A single approval by the viewer.
+        XCTAssertTrue(approved([.stub(login: "octocat", state: "APPROVED")]))
+        // Case-insensitive login match.
+        XCTAssertTrue(approved([.stub(login: "OctoCat", state: "APPROVED")]))
+        // Latest definitive review wins: approved then dismissed → not approved.
+        XCTAssertFalse(approved([
+            .stub(login: "octocat", state: "APPROVED", submittedAt: "2026-01-01T00:00:00Z"),
+            .stub(login: "octocat", state: "DISMISSED", submittedAt: "2026-01-02T00:00:00Z"),
+        ]))
+        // Changes-requested then approved → approved.
+        XCTAssertTrue(approved([
+            .stub(login: "octocat", state: "CHANGES_REQUESTED", submittedAt: "2026-01-01T00:00:00Z"),
+            .stub(login: "octocat", state: "APPROVED", submittedAt: "2026-01-02T00:00:00Z"),
+        ]))
+        // A comment-only review doesn't count as approval, and doesn't override an earlier one.
+        XCTAssertTrue(approved([
+            .stub(login: "octocat", state: "APPROVED", submittedAt: "2026-01-01T00:00:00Z"),
+            .stub(login: "octocat", state: "COMMENTED", submittedAt: "2026-01-02T00:00:00Z"),
+        ]))
+        // Another user's approval is irrelevant to the viewer's gate.
+        XCTAssertFalse(approved([.stub(login: "someone-else", state: "APPROVED")]))
+    }
+
+    func testRefreshHydratesGate() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        fake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")] // viewer already approved
+        fake.repositoryResult = .stub(push: true)
+        let store = try makeStore(api: fake) // default account login = octocat
+
+        await store.refresh()
+        try await waitUntil { store.prGates[self.key(100)] != nil }
+
+        let gate = try XCTUnwrap(store.prGates[key(100)])
+        XCTAssertTrue(gate.alreadyApproved)
+        XCTAssertTrue(gate.mergeable)
+    }
+
+    func testRefreshGateHidesMergeWithoutPushAccess() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 101, number: 8)]
+        fake.pullRequestResult = .stub(number: 8, mergeableState: "clean")
+        fake.repositoryResult = .stub(push: false) // read-only repo
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        try await waitUntil { store.prGates[self.key(101)] != nil }
+
+        let gate = try XCTUnwrap(store.prGates[key(101)])
+        XCTAssertFalse(gate.mergeable)
+        XCTAssertFalse(gate.alreadyApproved) // no reviews stubbed
+    }
+
+    func testRefreshSkipsReviewsForOwnPR() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 102, number: 9)] // authored by jaylann
+        fake.pullRequestResult = .stub(number: 9, mergeableState: "clean")
+        // An approval that WOULD flip alreadyApproved if reviews were consulted for own PRs.
+        fake.reviewsResult = [.stub(login: "jaylann", state: "APPROVED")]
+        fake.repositoryResult = .stub(push: true)
+        let account = try makeAccount(login: "jaylann")
+        let store = try makeStore(api: fake, accounts: [account])
+
+        await store.refresh()
+        try await waitUntil { store.prGates[self.key(102, account: "jaylann")] != nil }
+
+        let gate = try XCTUnwrap(store.prGates[key(102, account: "jaylann")])
+        XCTAssertFalse(gate.alreadyApproved) // reviews skipped for the viewer's own PR
+        XCTAssertTrue(gate.mergeable) // you can still merge your own PR
+    }
+
     /// Polls `condition` on the main actor until true or the timeout elapses.
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)

@@ -138,6 +138,58 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(first.conclusion, "success")
         XCTAssertEqual(runs.last?.conclusion, nil)
     }
+
+    func testReviewsDecodesAndHitsExpectedPath() async throws {
+        let pathBox = HeaderBox()
+        MockURLProtocol.handler = { request in
+            pathBox.path = request.url?.path
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            [
+              { "user": { "login": "jaylann", "avatar_url": null },
+                "state": "APPROVED", "submitted_at": "2026-01-01T00:00:00Z" },
+              { "user": { "login": "octocat", "avatar_url": null },
+                "state": "COMMENTED", "submitted_at": null }
+            ]
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let reviews = try await client.reviews(repo: "octo/repo", number: 42)
+
+        XCTAssertEqual(pathBox.path, "/repos/octo/repo/pulls/42/reviews")
+        XCTAssertEqual(reviews.count, 2)
+        XCTAssertEqual(reviews.first?.user?.login, "jaylann")
+        XCTAssertEqual(reviews.first?.state, "APPROVED")
+        XCTAssertNil(reviews.last?.submittedAt)
+    }
+
+    func testRepositoryDecodesPermissions() async throws {
+        let pathBox = HeaderBox()
+        MockURLProtocol.handler = { request in
+            pathBox.path = request.url?.path
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            { "permissions": { "admin": false, "maintain": true, "push": true, "pull": true } }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let info = try await client.repository(repo: "octo/repo")
+
+        XCTAssertEqual(pathBox.path, "/repos/octo/repo")
+        XCTAssertEqual(info.permissions?.push, true)
+        XCTAssertEqual(info.permissions?.maintain, true)
+        XCTAssertEqual(info.permissions?.admin, false)
+    }
 }
 
 /// Reference box so the `@Sendable` handler can hand captured request headers back to the test.

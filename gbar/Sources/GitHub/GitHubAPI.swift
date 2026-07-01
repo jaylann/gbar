@@ -18,6 +18,10 @@ protocol GitHubAPI: Sendable {
     func searchIssues(_ query: String) async throws -> [SearchIssue]
     /// Fetch the full detail for a single pull request (`owner/name` slug + number).
     func pullRequest(repo: String, number: Int) async throws -> PullRequestDetail
+    /// Fetch the reviews submitted on a pull request (`owner/name` slug + number).
+    func reviews(repo: String, number: Int) async throws -> [PullRequestReview]
+    /// Fetch a repository's detail (`owner/name` slug) — used for the viewer's permissions.
+    func repository(repo: String) async throws -> RepositoryInfo
     /// Submit an approving review on a pull request.
     func approvePullRequest(repo: String, number: Int) async throws
     /// Merge a pull request using the given strategy.
@@ -70,6 +74,21 @@ struct GitHubClient: GitHubAPI {
         let request = try makeRequest(path: "repos/\(repo)/pulls/\(number)")
         let data = try await execute(request)
         return try Self.decoder.decode(PullRequestDetail.self, from: data)
+    }
+
+    func reviews(repo: String, number: Int) async throws -> [PullRequestReview] {
+        let request = try makeRequest(
+            path: "repos/\(repo)/pulls/\(number)/reviews",
+            queryItems: [URLQueryItem(name: "per_page", value: "100")]
+        )
+        let data = try await execute(request)
+        return try Self.decoder.decode([PullRequestReview].self, from: data)
+    }
+
+    func repository(repo: String) async throws -> RepositoryInfo {
+        let request = try makeRequest(path: "repos/\(repo)")
+        let data = try await execute(request)
+        return try Self.decoder.decode(RepositoryInfo.self, from: data)
     }
 
     func approvePullRequest(repo: String, number: Int) async throws {

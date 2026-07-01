@@ -71,6 +71,10 @@ struct FakeGitHubAPI: GitHubAPI {
     var pullRequestResult: PullRequestDetail = .stub()
     /// Returned by `checkRuns` (defaults to empty, so CI hydration is a no-op unless stubbed).
     var checkRunsResult: [CheckRun] = []
+    /// Returned by `reviews` (defaults to empty → the viewer hasn't reviewed).
+    var reviewsResult: [PullRequestReview] = []
+    /// Returned by `repository` — defaults to full push access so Merge isn't gated unless stubbed.
+    var repositoryResult: RepositoryInfo = .stub(push: true)
     /// When set, `checkRuns` throws this — simulates a transient CI-fetch failure while the PR
     /// still loads into its section (so its CI baseline must be preserved, not wiped).
     var checkRunsError: Error?
@@ -102,6 +106,16 @@ struct FakeGitHubAPI: GitHubAPI {
             throw checkRunsError
         }
         return checkRunsResult
+    }
+
+    func reviews(repo _: String, number _: Int) async throws -> [PullRequestReview] {
+        if let error { throw error }
+        return reviewsResult
+    }
+
+    func repository(repo _: String) async throws -> RepositoryInfo {
+        if let error { throw error }
+        return repositoryResult
     }
 
     /// Records the approval, then throws `error` if one is injected so error paths are testable.
@@ -171,6 +185,14 @@ actor GatedGitHubAPI: GitHubAPI {
 
     func pullRequest(repo _: String, number _: Int) async throws -> PullRequestDetail {
         pullRequestResult
+    }
+
+    func reviews(repo _: String, number _: Int) async throws -> [PullRequestReview] {
+        []
+    }
+
+    func repository(repo _: String) async throws -> RepositoryInfo {
+        .stub(push: true)
     }
 
     func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
@@ -286,18 +308,26 @@ private let testDecoder: JSONDecoder = {
 
 extension PullRequestDetail {
     /// Minimal detail carrying a head SHA and branch ref, decoded from a synthetic payload.
-    static func stub(number: Int = 1, headSHA: String = "abc1234def", headRef: String = "feature/stub")
+    static func stub(
+        number: Int = 1,
+        headSHA: String = "abc1234def",
+        headRef: String = "feature/stub",
+        state: String = "open",
+        mergeableState: String = "clean",
+        draft: Bool = false
+    )
     -> PullRequestDetail {
         let json = """
         {
           "id": \(number),
           "number": \(number),
           "title": "Stub PR",
-          "state": "open",
+          "state": "\(state)",
           "html_url": "https://github.com/octo/repo/pull/\(number)",
           "merged": false,
           "mergeable": true,
-          "draft": false,
+          "mergeable_state": "\(mergeableState)",
+          "draft": \(draft),
           "user": { "login": "jaylann", "avatar_url": null },
           "created_at": "2026-01-01T00:00:00Z",
           "updated_at": "2026-01-01T00:00:00Z",
@@ -308,6 +338,37 @@ extension PullRequestDetail {
             fatalError("PullRequestDetail.stub produced invalid JSON")
         }
         return detail
+    }
+}
+
+extension PullRequestReview {
+    /// A single review stub by `login` with the given `state`.
+    static func stub(login: String, state: String, submittedAt: String = "2026-01-01T00:00:00Z")
+    -> PullRequestReview {
+        let json = """
+        {
+          "user": { "login": "\(login)", "avatar_url": null },
+          "state": "\(state)",
+          "submitted_at": "\(submittedAt)"
+        }
+        """
+        guard let review = try? testDecoder.decode(PullRequestReview.self, from: Data(json.utf8)) else {
+            fatalError("PullRequestReview.stub produced invalid JSON")
+        }
+        return review
+    }
+}
+
+extension RepositoryInfo {
+    /// Repository info carrying only the viewer's `push` permission (the merge gate signal).
+    static func stub(push: Bool) -> RepositoryInfo {
+        let json = """
+        { "permissions": { "push": \(push), "maintain": false, "admin": false } }
+        """
+        guard let info = try? testDecoder.decode(RepositoryInfo.self, from: Data(json.utf8)) else {
+            fatalError("RepositoryInfo.stub produced invalid JSON")
+        }
+        return info
     }
 }
 
