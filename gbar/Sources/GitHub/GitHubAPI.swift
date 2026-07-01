@@ -99,6 +99,9 @@ struct GitHubClient: GitHubAPI {
         return decoder
     }()
 
+    /// A shared JSON encoder for request bodies — cheaper than allocating one per request.
+    private static let encoder = JSONEncoder()
+
     /// Build a request against `baseURL` with gbar's standard headers, optional query items,
     /// and an optional JSON body (which also sets `Content-Type`).
     private func makeRequest(
@@ -125,7 +128,7 @@ struct GitHubClient: GitHubAPI {
         request.setValue("gbar", forHTTPHeaderField: "User-Agent")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try JSONEncoder().encode(body)
+            request.httpBody = try Self.encoder.encode(body)
         }
         return request
     }

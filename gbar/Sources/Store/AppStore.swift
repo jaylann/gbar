@@ -70,6 +70,7 @@ final class AppStore {
 
     /// Builds the API client used by `refresh()`. Overridable so tests can inject a fake
     /// `GitHubAPI` without touching the network; defaults to the live `GitHubClient`.
+    @ObservationIgnored
     var makeAPI: @Sendable (_ baseURL: URL, _ token: String) -> GitHubAPI = { GitHubClient(baseURL: $0, token: $1) }
 
     var isSignedIn: Bool {
@@ -103,13 +104,16 @@ final class AppStore {
         startPolling()
     }
 
+    #if DEBUG
     /// Test-only initializer: constructs a store with a fixed base URL, an already-signed-in
     /// credential, and an injectable API factory — no Keychain/UserDefaults side effects.
     init(apiBaseURL: URL, credential: Credential, makeAPI: @escaping @Sendable (URL, String) -> GitHubAPI) {
         self.apiBaseURL = apiBaseURL
+        pollInterval = PollInterval.off.rawValue
         self.credential = credential
         self.makeAPI = makeAPI
     }
+    #endif
 
     func signIn(token: String, kind: Credential.Kind) {
         do {
