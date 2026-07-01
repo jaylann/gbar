@@ -71,6 +71,15 @@ struct FakeGitHubAPI: GitHubAPI {
     var pullRequestResult: PullRequestDetail = .stub()
     /// Returned by `checkRuns` (defaults to empty, so CI hydration is a no-op unless stubbed).
     var checkRunsResult: [CheckRun] = []
+    /// Returned by `currentUser()` — the account a token resolves to when validated/added.
+    var currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
+
+    func currentUser() async throws -> GitHubUser {
+        if let error {
+            throw error
+        }
+        return currentUserResult
+    }
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
         if let error {
@@ -166,6 +175,10 @@ actor GatedGitHubAPI: GitHubAPI {
             await withCheckedContinuation { releaseGate = $0 }
         }
         return checkRunsResult
+    }
+
+    func currentUser() async throws -> GitHubUser {
+        GitHubUser(login: "gated", avatarURL: nil)
     }
 
     private enum Unstubbed: Error { case notImplemented }

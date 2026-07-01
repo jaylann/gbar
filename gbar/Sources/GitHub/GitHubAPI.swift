@@ -11,6 +11,9 @@ enum MergeMethod: String {
 /// The GitHub data surface gbar needs. A protocol so the store can be tested against a
 /// fake, and so a future hosted/webhook backend can drop in behind the same interface.
 protocol GitHubAPI: Sendable {
+    /// Fetch the authenticated user (`GET /user`) — resolves a token to its account, used to
+    /// label and validate accounts on add.
+    func currentUser() async throws -> GitHubUser
     /// Run a `/search/issues` query and return the matching PRs/issues.
     func searchIssues(_ query: String) async throws -> [SearchIssue]
     /// Fetch the full detail for a single pull request (`owner/name` slug + number).
@@ -43,6 +46,12 @@ struct GitHubClient: GitHubAPI {
         self.baseURL = baseURL
         self.token = token
         self.session = session
+    }
+
+    func currentUser() async throws -> GitHubUser {
+        let request = try makeRequest(path: "user")
+        let data = try await execute(request)
+        return try Self.decoder.decode(GitHubUser.self, from: data)
     }
 
     func searchIssues(_ query: String) async throws -> [SearchIssue] {
