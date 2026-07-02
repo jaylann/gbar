@@ -45,6 +45,22 @@ enum NotificationDiff {
         "\(account.id)\n\(issue.id)"
     }
 
+    /// How recently an item must have been active to be worth a "new PR/issue" banner. A backstop
+    /// against the fetch window (`/search/issues` is capped and eventually-consistent): even if a
+    /// long-dormant item transiently churns into the fetched page and reads as unseen, a banner for
+    /// something last touched beyond this window is never wanted. The caller only applies this gate
+    /// when the previous poll was itself within the window (see `notifyNewSectionItems`), so an item
+    /// that legitimately predates a long polling gap — sleep, outage, notifications off — is still
+    /// bannered on recovery rather than dropped for being old.
+    static let recencyWindow: TimeInterval = 24 * 60 * 60
+
+    /// Whether an item's last activity (`updatedAt`, falling back to `createdAt`) is within
+    /// `window` of `now` — the recency gate for section banners. Future timestamps (clock skew)
+    /// count as recent.
+    static func isRecentlyActive(_ issue: SearchIssue, now: Date, window: TimeInterval = recencyWindow) -> Bool {
+        now.timeIntervalSince(issue.updatedAt ?? issue.createdAt) <= window
+    }
+
     /// The account-tagged items whose composite key wasn't present last poll — deduped across
     /// sections (the same item can appear in several) while preserving first-seen order.
     static func newSectionItems(

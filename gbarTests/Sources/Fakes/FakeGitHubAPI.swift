@@ -308,7 +308,16 @@ actor GatedGitHubAPI: GitHubAPI {
 extension SearchIssue {
     /// Builds a minimal `SearchIssue` for tests by decoding a synthetic payload, so tests
     /// don't depend on the (non-public) memberwise initializer.
-    static func stub(id: Int, number: Int = 1, title: String = "Stub", repo: String = "octo/repo") -> SearchIssue {
+    /// `updatedAt` defaults to *now* so an item reads as recently-active and survives the
+    /// notification recency gate; pass an old date to exercise the stale-item path.
+    static func stub(
+        id: Int,
+        number: Int = 1,
+        title: String = "Stub",
+        repo: String = "octo/repo",
+        updatedAt: Date = Date()
+    )
+    -> SearchIssue {
         let json = """
         {
           "id": \(id),
@@ -317,6 +326,7 @@ extension SearchIssue {
           "html_url": "https://github.com/\(repo)/pull/\(number)",
           "state": "open",
           "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "\(ISO8601DateFormatter().string(from: updatedAt))",
           "user": { "login": "jaylann", "avatar_url": null },
           "repository_url": "https://api.github.com/repos/\(repo)",
           "pull_request": { "html_url": "https://github.com/\(repo)/pull/\(number)", "merged_at": null },

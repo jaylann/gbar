@@ -50,6 +50,7 @@ extension AppStore {
         var newSeeded = seededSectionKeys
         var candidates: [AccountItem] = []
         var candidateKeys = Set<String>()
+        var didLoadAnySection = false
 
         for account in accounts {
             guard let load = loads[account.id] else { continue }
@@ -57,6 +58,7 @@ extension AppStore {
                 // A missing key means the query failed for this account — leave its baseline slice
                 // intact and don't seed it, so it can't drop out and re-fire on recovery.
                 guard let issues = load.sections[query.id] else { continue }
+                didLoadAnySection = true
                 let sectionKey = "\(account.id)\n\(query.id)"
                 let wasSeeded = seededSectionKeys.contains(sectionKey)
 
@@ -79,9 +81,28 @@ extension AppStore {
 
         seenSectionItemKeys = newBaseline
         seededSectionKeys = newSeeded
+        postSectionBanners(candidates, didLoadAnySection: didLoadAnySection)
+    }
+
+    /// Emit a banner for each genuinely-new section item, applying the recency gate, and advance
+    /// the poll marker. Split out of `notifyNewSectionItems` so the diff/baseline math stays within
+    /// the lint complexity budget.
+    ///
+    /// The recency gate guards against a dormant item churning back into the capped, eventually-
+    /// consistent fetch window *between consecutive polls*. It only holds up when the previous poll
+    /// was itself recent: after a long gap (system sleep, network outage, polling turned off) the
+    /// baseline diff is the honest "new since we last looked" signal, so gating by age would wrongly
+    /// drop a genuinely-new item whose activity predates the gap. Skip the gate when the gap exceeds
+    /// the window. Only successful polls advance the marker, so a run of failed polls during an
+    /// outage can't make the next recovery look "recent".
+    private func postSectionBanners(_ candidates: [AccountItem], didLoadAnySection: Bool) {
+        let now = Date()
+        let gateActive = lastSectionPollDate
+            .map { now.timeIntervalSince($0) <= NotificationDiff.recencyWindow } ?? false
+        if didLoadAnySection { lastSectionPollDate = now }
 
         guard notificationsEnabled, notifySections else { return }
-        for item in candidates {
+        for item in candidates where !gateActive || NotificationDiff.isRecentlyActive(item.issue, now: now) {
             let issue = item.issue
             notifier?.post(
                 title: issue.isPullRequest ? "New pull request" : "New issue",
@@ -181,6 +202,7 @@ extension AppStore {
         lastUnreadInboxKeys = []
         seededInboxAccounts = []
         lastCheckStatus = [:]
+        lastSectionPollDate = nil
     }
 
     /// Drop one account's baseline entries — used when removing a single account so re-adding it
