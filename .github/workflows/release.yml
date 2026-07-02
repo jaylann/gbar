@@ -84,14 +84,23 @@ jobs:
           app-id: ${{ vars.RP_APP_ID }}
           private-key: ${{ secrets.RP_APP_KEY }}
 
+      # Back-merge main → stage so stage keeps the release's version bump. Best-effort: a
+      # sync failure must never fail the release (the DMG is the artifact that matters), so
+      # this is continue-on-error and lives after the tag/release are already created.
       - name: Sync stage to main
         if: steps.check.outputs.exists == 'false'
+        continue-on-error: true
         env:
           PUSH_TOKEN: ${{ steps.bot-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: |
           git fetch origin stage
           git checkout stage
           git merge origin/main --no-edit
+          # actions/checkout persisted GITHUB_TOKEN as an http.<host>.extraheader auth header,
+          # which overrides the URL credential below. Clear it so this push authenticates as
+          # the release bot (a ruleset bypass actor) instead of GITHUB_TOKEN (which isn't) —
+          # otherwise the stage ruleset rejects the push with GH013.
+          git config --local --unset-all http."https://github.com/".extraheader || true
           git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" stage
 
   dmg:
