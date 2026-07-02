@@ -7,7 +7,7 @@ actor DeviceFlowClient {
     struct DeviceCode: Decodable {
         let deviceCode: String
         let userCode: String
-        let verificationURI: String
+        let verificationUri: String
         let interval: Int
         let expiresIn: Int
     }
