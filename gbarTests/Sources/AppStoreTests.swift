@@ -532,6 +532,60 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    func testMarkAllReadCallsBulkAPIAndClearsInbox() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        await store.markAllRead()
+
+        XCTAssertEqual(fake.recorder.markAllCount, 1)
+        XCTAssertTrue(store.notifications.isEmpty)
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
+    func testMarkAllReadFailureSetsErrorAndKeepsItems() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]
+        struct Boom: Error {}
+        fake.actionError = Boom()
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        await store.markAllRead()
+
+        XCTAssertEqual(store.notifications.map(\.notification.id), ["1", "2"])
+        XCTAssertNotNil(store.lastErrorMessage)
+    }
+
+    /// With the account filter scoped to one account, only that account's inbox is cleared and
+    /// only its bulk endpoint is hit — the other account is left untouched.
+    func testMarkAllReadRespectsAccountFilter() async throws {
+        let urlA = try XCTUnwrap(URL(string: "https://api.github.com"))
+        let urlB = try XCTUnwrap(URL(string: "https://ghe.example.com/api/v3"))
+        var fakeA = FakeGitHubAPI()
+        fakeA.notificationsResult = [.stub(id: "a1")]
+        var fakeB = FakeGitHubAPI()
+        fakeB.notificationsResult = [.stub(id: "b1")]
+        let alice = Account(login: "alice", avatarURL: nil, kind: .oauth, apiBaseURL: urlA)
+        let bob = Account(login: "bob", avatarURL: nil, kind: .personalAccessToken, apiBaseURL: urlB)
+        let store = AppStore(
+            apiBaseURL: urlA,
+            accounts: [alice, bob],
+            makeAPI: { [fakeA, fakeB] base, _ in base == urlB ? fakeB : fakeA }
+        )
+        await store.refresh()
+
+        store.accountFilter = alice.id
+        await store.markAllRead()
+
+        XCTAssertEqual(fakeA.recorder.markAllCount, 1)
+        XCTAssertEqual(fakeB.recorder.markAllCount, 0)
+        XCTAssertEqual(store.notifications.map(\.notification.id), ["b1"])
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
     // MARK: - Multi-account aggregation & filtering
 
     /// Two accounts on different hosts; `makeAPI` routes by base URL so each returns a

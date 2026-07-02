@@ -1,9 +1,8 @@
 import SwiftUI
 
-/// A notification-inbox row. GitHub's notifications feed isn't wired in v1, so this is
-/// driven by a local display model — its shape mirrors what the `/notifications` API
-/// returns, so wiring it later is a mapping, not a redesign. Timeline layout (Ivory-
-/// style): type icon, subject title, dim reason · repo · time, unread dot.
+/// A notification-inbox row, driven by a local display model mapped from the `/notifications`
+/// API. Timeline layout (Ivory-style): type icon, subject title, dim reason · repo · time,
+/// unread dot.
 struct NotificationRow: View {
     struct Model: Identifiable {
         enum Reason {

@@ -532,6 +532,28 @@ extension AppStore {
         }
     }
 
+    /// Mark the whole (account-scoped) inbox read via the bulk endpoint. Respects the active
+    /// account filter; ignores the transient reason/search filters (the UI hides this action
+    /// while either is active). Pessimistic: drop an account's notifications only after its
+    /// PUT succeeds. Baselines self-heal on the next poll, so no explicit baseline reset needed.
+    func markAllRead() async {
+        let scoped = accountFilter == nil ? accounts : accounts.filter { $0.id == accountFilter }
+        var failed = false
+        for account in scoped {
+            guard notifications.contains(where: { $0.account.id == account.id && $0.notification.unread }),
+                  let token = tokenForAccount(account) else { continue }
+            let api = makeAPI(account.apiBaseURL, token)
+            do {
+                try await api.markAllNotificationsRead()
+                notifications.removeAll { $0.account.id == account.id }
+            } catch {
+                failed = true
+                Log.network.error("mark all read failed: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        lastErrorMessage = failed ? "Couldn't mark all notifications as read." : nil
+    }
+
     /// Drop an item (by composite id) from every loaded section — optimistic UI after a merge.
     func removeItem(id: AccountItem.ID) {
         sections = sections.map { section in
