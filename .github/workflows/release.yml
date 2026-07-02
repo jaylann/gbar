@@ -124,6 +124,15 @@ jobs:
       # Pre-write Release.xcconfig with Developer ID + hardened-runtime values. make-dmg.sh
       # runs `just _xcconfig`, which only BACKFILLS missing keys, so this file is respected.
       # This is also where the paid build's baked GH OAuth client ID is materialized (#4).
+      #
+      # Signing notes (verified locally against the real Developer ID cert):
+      #  - GBAR_ENTITLEMENTS = gbar/gbar.entitlements (NOT gbar-signed): Developer ID *Manual*
+      #    signing has no provisioning profile, so keychain-access-groups would fail the build
+      #    ("requires a provisioning profile"). KeychainStore falls back to the file-based
+      #    keychain, whose ACL is bound to the stable Developer ID signature (no recurring prompt).
+      #  - CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO: `xcodebuild build` with Manual signing
+      #    injects com.apple.security.get-task-allow, which notarization rejects.
+      # Body must be valid xcconfig (KEY = VALUE / `//` comments only) — no `#` lines.
       - name: Write signed Release.xcconfig
         if: env.HAS_SIGNING == 'true'
         env:
@@ -137,9 +146,10 @@ jobs:
           GBAR_CODE_SIGN_STYLE = Manual
           GBAR_CODE_SIGN_IDENTITY = Developer ID Application
           GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_RELEASE}
-          GBAR_ENTITLEMENTS = gbar/gbar-signed.entitlements
+          GBAR_ENTITLEMENTS = gbar/gbar.entitlements
           ENABLE_HARDENED_RUNTIME = YES
           OTHER_CODE_SIGN_FLAGS = --timestamp
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
           EOF
 
       - name: Build DMG
