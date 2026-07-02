@@ -158,6 +158,15 @@ jobs:
           DMG=$(./scripts/make-dmg.sh dist)
           echo "path=$DMG" >> "$GITHUB_OUTPUT"
 
+      # Sign the DMG itself with Developer ID (make-dmg.sh signs the app, not the container).
+      # A signed + notarized + stapled DMG passes `spctl -t open` offline, not just the app.
+      # Verified locally (2026-07-02): spctl → "accepted, source=Notarized Developer ID".
+      - name: Sign DMG
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          codesign --force --timestamp \
+            --sign "Developer ID Application" "${{ steps.build.outputs.path }}"
+
       # Notarize the DMG (contains a Developer-ID-signed, hardened-runtime app), then staple
       # the ticket so Gatekeeper accepts it offline. Skipped on self-host forks (no secrets).
       - name: Notarize DMG
