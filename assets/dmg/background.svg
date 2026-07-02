@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="400" viewBox="0 0 660 400">
+  <!-- DMG installer background. Source of truth — render to background.png (660x400)
+       and background@2x.png (1320x800); make-dmg.sh packs both into a retina TIFF.
+       Finder icon slots (128px, centers): gbar.app (166,205) · Applications (494,205). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1E232A"/>
+      <stop offset="1" stop-color="#161A20"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="660" height="400" fill="url(#bg)"/>
+
+  <!-- wordmark -->
+  <text x="36" y="52" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
+        font-size="20" font-weight="600" letter-spacing="0.5" fill="#F2EDE4">gbar</text>
+  <text x="36" y="72" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
+        font-size="11" fill="#8B949E">GitHub, in your menu bar</text>
+
+  <!-- branch drag path: commit node under gbar.app merging into Applications -->
+  <!-- origin node: cream ring (the icon's trunk-node language) -->
+  <circle cx="258" cy="205" r="7" fill="none" stroke="#F2EDE4" stroke-width="3.5"/>
+  <!-- branch curve: same bezier language as the app icon's branch layer -->
+  <path d="M 265 205 C 292 205, 296 230, 328 230 C 360 230, 368 205, 404 205"
+        fill="none" stroke="#E8843C" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- destination node: filled amber (the merge) -->
+  <circle cx="412" cy="205" r="8" fill="#E8843C"/>
+
+  <!-- label chips: Finder always draws icon labels BLACK once a background picture is
+       set (even in dark mode), so give the two labels a cream pill to sit on. Geometry
+       matches 128px icons at (166,205)/(494,205) with 12pt labels (center y ≈ 290). -->
+  <rect x="127" y="276" width="78" height="24" rx="12" fill="#F2EDE4"/>
+  <rect x="442" y="276" width="102" height="24" rx="12" fill="#F2EDE4"/>
+
+  <!-- caption -->
+  <text x="330" y="318" text-anchor="middle"
+        font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
+        font-size="13" fill="#8B949E">Drag gbar to Applications to install</text>
+
+  <!-- footer (kept above y≈370: Finder's optional path bar covers the bottom ~30px) -->
+  <line x1="36" y1="342" x2="624" y2="342" stroke="#F2EDE4" stroke-opacity="0.08"/>
+  <text x="36" y="362" font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
+        font-size="10" fill="#8B949E" fill-opacity="0.7">lanfermann.dev</text>
+  <text x="624" y="362" text-anchor="end"
+        font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
+        font-size="10" fill="#8B949E" fill-opacity="0.7">Made with ❤️ by Justin Lanfermann</text>
+</svg>
