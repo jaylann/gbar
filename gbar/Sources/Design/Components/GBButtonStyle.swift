@@ -38,9 +38,9 @@ struct GBButtonStyle: ButtonStyle {
                 .frame(height: 28)
                 .frame(width: variant == .icon ? 28 : nil)
                 .foregroundStyle(foreground)
-                .background(background, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                .background(background, in: Capsule(style: .continuous))
                 .opacity(isEnabled ? 1 : 0.4)
-                .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+                .contentShape(Capsule(style: .continuous))
                 .onHover { isHovering = $0 }
                 .animation(Motion.respecting(reduceMotion, Motion.hover), value: isHovering)
                 .animation(Motion.respecting(reduceMotion, Motion.hover), value: configuration.isPressed)
