@@ -247,7 +247,7 @@ struct MenuContentView: View {
         if !store.hasLoaded || (repoFeedTab && !store.hasLoadedRepoFeeds) {
             // Fill the taller body from the top so the skeleton reads like the list it stands
             // in for, rather than a short block floating mid-popover.
-            LoadingView(rows: 8)
+            LoadingView(rows: 8, reservesDisclosureGutter: selectedTab == .prs)
                 .padding(.horizontal, Theme.Spacing.sm)
                 .padding(.vertical, Theme.Spacing.xs)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
