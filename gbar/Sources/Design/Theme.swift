@@ -92,6 +92,22 @@ enum Theme {
         /// Code-shaped text: `#123`, branch names, SHAs, durations. Monospaced so it
         /// doesn't jitter when values change on refresh.
         static let mono = Font.system(size: 11, design: .monospaced)
+        /// The device-flow user code: display-sized monospace, legible across the room.
+        static let deviceCode = Font.system(size: 22, weight: .semibold, design: .monospaced)
+    }
+
+    // MARK: - Window/pane dimensions
+
+    enum Layout {
+        /// The menu-bar popover's fixed width.
+        static let popoverWidth: CGFloat = 480
+        /// The popover's cap before its content scrolls.
+        static let popoverMaxHeight: CGFloat = 720
+        /// Signed-in floor so the popover doesn't collapse between refreshes.
+        static let popoverMinHeight: CGFloat = 560
+        /// The fixed Settings window size (shared by every pane's preview).
+        static let settingsWidth: CGFloat = 500
+        static let settingsHeight: CGFloat = 560
     }
 }
 

@@ -1,7 +1,8 @@
 import SwiftUI
 
 /// The General settings pane: background refresh cadence, native-notification preferences, and
-/// an About footer with the build version and the source-available license line.
+/// an About footer. Each section's rows sit inside one grouped card (quiet fill + hairline
+/// dividers), so the pane reads as three calm blocks instead of a loose stack of controls.
 struct GeneralPane: View {
     @Bindable var store: AppStore
     @Environment(\.openURL) private var openURL
@@ -19,6 +20,7 @@ struct GeneralPane: View {
                 refreshSection
                 notificationsSection
                 aboutSection
+                footer
             }
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, Theme.Spacing.md)
@@ -34,30 +36,32 @@ struct GeneralPane: View {
     // MARK: Refresh
 
     private var refreshSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             SectionHeader(title: "Refresh")
-            settingRow(
-                title: "Auto-refresh",
-                subtitle: "How often gbar checks GitHub while the menu is closed — keeps the badge current."
-            ) {
-                Menu {
-                    ForEach(PollInterval.allCases) { option in
-                        Button {
-                            store.pollInterval = option.rawValue
-                        } label: {
-                            if option == currentInterval {
-                                Label(option.label, systemImage: "checkmark")
-                            } else {
-                                Text(option.label)
+            groupCard {
+                settingRow(
+                    title: "Auto-refresh",
+                    subtitle: "How often gbar checks GitHub while the menu is closed."
+                ) {
+                    Menu {
+                        ForEach(PollInterval.allCases) { option in
+                            Button {
+                                store.pollInterval = option.rawValue
+                            } label: {
+                                if option == currentInterval {
+                                    Label(option.label, systemImage: "checkmark")
+                                } else {
+                                    Text(option.label)
+                                }
                             }
                         }
+                    } label: {
+                        Text(currentInterval.label)
                     }
-                } label: {
-                    Text(currentInterval.label)
+                    .menuStyle(.button)
+                    .buttonStyle(GBButtonStyle(variant: .secondary))
+                    .fixedSize()
                 }
-                .menuStyle(.button)
-                .buttonStyle(GBButtonStyle(variant: .secondary))
-                .fixedSize()
             }
         }
     }
@@ -69,26 +73,31 @@ struct GeneralPane: View {
     // MARK: Notifications
 
     private var notificationsSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             SectionHeader(title: "Notifications")
-            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                Toggle("Enable notifications", isOn: $store.notificationsEnabled)
+            Text("Native banners for new items and CI pass/fail on your PRs. Click one to open it in the browser.")
+                .font(Theme.Typography.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .padding(.horizontal, Theme.Spacing.md)
+                .padding(.bottom, Theme.Spacing.xs)
+            groupCard {
+                toggleRow("Enable notifications", isOn: $store.notificationsEnabled)
+                Divider()
                 VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
-                    Toggle("New notifications", isOn: $store.notifyInbox)
-                    Toggle("New PRs & issues", isOn: $store.notifySections)
-                    Toggle("CI status changes", isOn: $store.notifyChecks)
+                    toggleRow("New notifications", isOn: $store.notifyInbox)
+                    toggleRow("New PRs & issues", isOn: $store.notifySections)
+                    toggleRow("CI status changes", isOn: $store.notifyChecks)
                 }
                 .padding(.leading, Theme.Spacing.md)
                 .disabled(!store.notificationsEnabled)
-                Text("Native banners for new items and CI pass/fail on your PRs. Click one to open it in the browser.")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(.secondary)
+                .opacity(store.notificationsEnabled ? 1 : 0.5)
+                Divider()
                 authStatusRow
             }
             .toggleStyle(.switch)
             .tint(Theme.Palette.accent)
             .font(Theme.Typography.rowTitle.weight(.regular))
-            .padding(.horizontal, Theme.Spacing.md)
         }
     }
 
@@ -105,14 +114,12 @@ struct GeneralPane: View {
                 .foregroundStyle(.secondary)
                 .tint(Theme.Palette.pending)
                 .fixedSize(horizontal: false, vertical: true)
-                if let url = Self.notificationSettingsURL {
-                    Button {
-                        openURL(url)
-                    } label: {
-                        Label("Open System Settings", systemImage: "arrow.up.right.square")
-                    }
-                    .buttonStyle(GBButtonStyle(variant: .secondary))
+                Button {
+                    if let url = Self.notificationSettingsURL { openURL(url) }
+                } label: {
+                    Label("Open System Settings", systemImage: "arrow.up.right.square")
                 }
+                .buttonStyle(GBButtonStyle(variant: .secondary))
             }
         } else if store.notificationsEnabled, store.notificationAuthStatus == .notDetermined {
             Button {
@@ -135,52 +142,94 @@ struct GeneralPane: View {
     // MARK: About
 
     private var aboutSection: some View {
-        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
             SectionHeader(title: "About")
-            VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
-                HStack(spacing: Theme.Spacing.xs) {
-                    Text("gbar")
-                        .font(Theme.Typography.rowTitle)
-                        .foregroundStyle(Theme.Palette.accent)
-                    Text("v\(appVersion)")
-                        .font(Theme.Typography.mono)
-                        .foregroundStyle(.secondary)
-                }
-                Text("A GitHub companion for the macOS menu bar.")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(.secondary)
-                Text("Source-available under PolyForm Shield 1.0.0.")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(.tertiary)
-                if let url = Self.repoURL {
-                    Button {
-                        openURL(url)
-                    } label: {
-                        Label("View on GitHub", systemImage: "arrow.up.right.square")
+            groupCard {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Spacing.md) {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        HStack(spacing: Theme.Spacing.xs) {
+                            Text("gbar")
+                                .font(Theme.Typography.rowTitle)
+                                .foregroundStyle(Theme.Palette.accent)
+                            Text("v\(appVersion)")
+                                .font(Theme.Typography.mono)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text("A GitHub companion for the macOS menu bar.")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Source-available under PolyForm Shield 1.0.0.")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(.tertiary)
                     }
-                    .buttonStyle(GBButtonStyle(variant: .ghost))
-                    .padding(.top, Theme.Spacing.xs)
+                    Spacer(minLength: 0)
+                    if let url = Self.repoURL {
+                        Button {
+                            openURL(url)
+                        } label: {
+                            Label("View on GitHub", systemImage: "arrow.up.right.square")
+                        }
+                        .buttonStyle(GBButtonStyle(variant: .ghost))
+                    }
                 }
             }
-            .padding(.horizontal, Theme.Spacing.md)
         }
+    }
+
+    /// Quiet maker's mark at the very bottom of Settings.
+    private var footer: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            Text("Made by")
+            Button("Justin Lanfermann") {
+                if let url = URL(string: "https://lanfermann.dev") { openURL(url) }
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .underline()
+            .gbTooltip("lanfermann.dev")
+        }
+        .font(Theme.Typography.caption)
+        .foregroundStyle(.tertiary)
+        .frame(maxWidth: .infinity)
+        .padding(.top, Theme.Spacing.xs)
     }
 
     private var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "—"
     }
 
-    // MARK: Layout helper
+    // MARK: Layout helpers
+
+    /// One grouped settings card: the section's rows on a quiet fill with rounded corners,
+    /// separated by explicit `Divider()`s at the call site.
+    private func groupCard(@ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+            content()
+        }
+        .padding(Theme.Spacing.md)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+        .padding(.horizontal, Theme.Spacing.md)
+    }
+
+    /// A switch row with the label leading and the switch pinned to the card's trailing edge,
+    /// so every switch in a card lines up in one column.
+    private func toggleRow(_ title: String, isOn: Binding<Bool>) -> some View {
+        settingRow(title: title) {
+            Toggle(title, isOn: isOn)
+                .labelsHidden()
+        }
+    }
 
     /// A labeled settings row: a title (+ optional explanatory subtitle) on the left, a trailing
-    /// control on the right, aligned to the pane's text inset.
+    /// control on the right.
     private func settingRow(
         title: String,
         subtitle: String? = nil,
         @ViewBuilder control: () -> some View
     )
     -> some View {
-        HStack(alignment: .top, spacing: Theme.Spacing.md) {
+        HStack(alignment: .center, spacing: Theme.Spacing.md) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(Theme.Typography.rowTitle.weight(.regular))
@@ -194,14 +243,13 @@ struct GeneralPane: View {
             Spacer(minLength: 0)
             control()
         }
-        .padding(.horizontal, Theme.Spacing.md)
     }
 }
 
 #if DEBUG
 #Preview("GeneralPane") {
     GeneralPane(store: AppStore())
-        .frame(width: 500, height: 560)
+        .frame(width: Theme.Layout.settingsWidth, height: Theme.Layout.settingsHeight)
         .background(Surface.canvas)
 }
 #endif

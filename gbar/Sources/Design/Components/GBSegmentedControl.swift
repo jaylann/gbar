@@ -28,7 +28,7 @@ struct GBSegmentedControl<Tag: Hashable>: View {
             }
         }
         .padding(2)
-        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
+        .background(Surface.controlFill, in: Capsule(style: .continuous))
     }
 
     private func segmentButton(_ segment: Segment) -> some View {
@@ -52,7 +52,7 @@ struct GBSegmentedControl<Tag: Hashable>: View {
             .frame(maxWidth: .infinity)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous)
+                    Capsule(style: .continuous)
                         .fill(Color(nsColor: .controlBackgroundColor))
                         .shadow(color: .black.opacity(0.12), radius: 1, y: 0.5)
                         .matchedGeometryEffect(id: "pill", in: pill)

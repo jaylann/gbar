@@ -3,22 +3,23 @@ import SwiftUI
 
 /// The Accounts settings pane: the connected GitHub identities up top (each removable on
 /// hover), then an add-account form that toggles between the two supported credential kinds —
-/// device flow (public OAuth client ID) and a pasted personal access token — with the optional
-/// Enterprise host tucked behind a disclosure. Sign-out-all lives at the bottom. All the
-/// auth wiring (typed status, in-place client-ID persistence, error copy) is preserved from
-/// the previous form; only the presentation moves onto the design system.
+/// device flow and a pasted personal access token. The technical knobs (OAuth client ID,
+/// Enterprise host) live behind a single "Advanced" disclosure; the client ID defaults to the
+/// baked/stored one, so the common path is one primary button. Sign-out-all lives at the
+/// bottom. All the auth wiring (typed status, error copy) is preserved from the previous form.
 struct AccountsPane: View {
     @Bindable var store: AppStore
     @Environment(\.openURL) private var openURL
 
-    @State private var clientID = AppConfig.bakedClientID ?? ""
+    /// The user's explicit client-ID override; blank means "use the baked/stored default".
+    @State private var clientID = ""
     @State private var patToken = ""
     /// Optional per-account host override for the account being added (blank = default host).
     @State private var addHost = ""
     /// The chosen add-account credential kind, so only the relevant fields show.
     @State private var method: Method = .deviceFlow
-    /// The Enterprise host field is off the common path — revealed on demand.
-    @State private var showsHostField = false
+    /// Client ID + Enterprise host are off the common path — revealed on demand.
+    @State private var showsAdvanced = false
     /// The live device-flow user code, surfaced as its own copyable card while we poll.
     @State private var deviceCode: String?
     /// Typed sign-in state, rendered as a loading / error / success line under the controls.
@@ -56,9 +57,9 @@ struct AccountsPane: View {
             .padding(.vertical, Theme.Spacing.md)
         }
         .onAppear {
-            // Seed the field from the persisted (public) client ID so a returning user doesn't
-            // retype it; the baked build already has it, self-host remembers the last one used.
-            if clientID.isEmpty { clientID = store.oauthClientID }
+            // Self-host with no usable client ID anywhere: open Advanced so the required field
+            // is visible instead of leaving a mysteriously disabled sign-in button.
+            if effectiveClientID.isEmpty { showsAdvanced = true }
         }
     }
 
@@ -117,7 +118,7 @@ struct AccountsPane: View {
                 case .deviceFlow: deviceFlowFields
                 case .pat: patFields
                 }
-                hostDisclosure
+                advancedDisclosure
                 statusView
             }
             .padding(.horizontal, Theme.Spacing.md)
@@ -134,8 +135,6 @@ struct AccountsPane: View {
 
     @ViewBuilder
     private var deviceFlowFields: some View {
-        TextField("OAuth App client ID", text: $clientID)
-            .modifier(SettingsFieldStyle())
         if let deviceCode {
             deviceCodeCard(deviceCode)
         }
@@ -146,7 +145,10 @@ struct AccountsPane: View {
             Text("Sign in with GitHub")
         }
         .buttonStyle(GBButtonStyle(variant: .primary, isLoading: status.isWorking && lastAttempt == .deviceFlow))
-        .disabled(clientID.isEmpty || status.isWorking)
+        .disabled(effectiveClientID.isEmpty || status.isWorking)
+        Text("Opens github.com in your browser to authorize gbar.")
+            .font(Theme.Typography.caption)
+            .foregroundStyle(.secondary)
     }
 
     @ViewBuilder
@@ -172,7 +174,7 @@ struct AccountsPane: View {
                 .foregroundStyle(.secondary)
             HStack(spacing: Theme.Spacing.sm) {
                 Text(code)
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                    .font(Theme.Typography.deviceCode)
                     .tracking(3)
                     .textSelection(.enabled)
                 Spacer(minLength: 0)
@@ -192,29 +194,38 @@ struct AccountsPane: View {
         .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
-    /// Enterprise host, revealed on demand so the common github.com case stays uncluttered.
+    /// The technical knobs — OAuth client ID (device flow only) and Enterprise host — behind one
+    /// disclosure, so the common github.com case is just a button.
     @ViewBuilder
-    private var hostDisclosure: some View {
-        Button {
-            withAnimation(Motion.spring) { showsHostField.toggle() }
-        } label: {
-            HStack(spacing: Theme.Spacing.xs) {
-                Image(systemName: "chevron.right")
-                    .font(.system(size: 9, weight: .semibold))
-                    .rotationEffect(.degrees(showsHostField ? 90 : 0))
-                Text("Enterprise host")
+    private var advancedDisclosure: some View {
+        DisclosureLink(title: "Advanced", isExpanded: $showsAdvanced)
+        if showsAdvanced {
+            VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                if method == .deviceFlow {
+                    VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                        TextField(
+                            "OAuth App client ID",
+                            text: $clientID,
+                            prompt: Text(defaultClientID.isEmpty ? "OAuth App client ID" : defaultClientID)
+                        )
+                        .modifier(SettingsFieldStyle())
+                        if defaultClientID.isEmpty {
+                            ValidationHint(message: "Self-hosted builds need a GitHub OAuth App client ID to sign in.")
+                        } else {
+                            Text("Leave blank to use the built-in client ID.")
+                                .font(Theme.Typography.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+                    TextField("API base URL", text: $addHost, prompt: Text(store.apiBaseURL.absoluteString))
+                        .modifier(SettingsFieldStyle())
+                    Text("Leave blank for github.com. For GitHub Enterprise, e.g. https://ghe.example.com/api/v3")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
-            .font(Theme.Typography.caption)
-            .foregroundStyle(.secondary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        if showsHostField {
-            TextField("API base URL", text: $addHost, prompt: Text(store.apiBaseURL.absoluteString))
-                .modifier(SettingsFieldStyle())
-            Text("Leave blank for github.com. For GitHub Enterprise, e.g. https://ghe.example.com/api/v3")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -279,6 +290,18 @@ struct AccountsPane: View {
         return host == "api.github.com" ? "github.com" : host
     }
 
+    /// The client ID used when the user hasn't typed an override: baked into the build if
+    /// present, else the last one persisted on the store (self-host remembers it).
+    private var defaultClientID: String {
+        AppConfig.bakedClientID ?? store.oauthClientID
+    }
+
+    /// The client ID a sign-in actually uses: the typed override when non-blank, else the default.
+    private var effectiveClientID: String {
+        let typed = clientID.trimmingCharacters(in: .whitespacesAndNewlines)
+        return typed.isEmpty ? defaultClientID : typed
+    }
+
     /// The host a newly-added account should use: the override field if filled, else the
     /// app default. Falls back to the default on an unparsable override.
     private var resolvedAddURL: URL {
@@ -296,21 +319,22 @@ struct AccountsPane: View {
     private func startDeviceFlow() async {
         status = .working("Requesting a device code…")
         deviceCode = nil
-        let host = resolvedAddURL
         // Persist the (public) client ID on the store so a later 401 can reconnect this account
-        // in place without the user re-entering it.
-        store.oauthClientID = clientID
-        let client = DeviceFlowClient(
-            clientID: clientID,
-            webBaseURL: AppConfig.webBaseURL(forAPI: host)
-        )
+        // in place without the user re-entering it. Only a typed override is written — the baked
+        // default shouldn't overwrite a previously stored self-host value.
+        if !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            store.oauthClientID = effectiveClientID
+        }
         do {
-            let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
-            deviceCode = code.userCode
-            status = .working("Waiting for you to authorize in the browser…")
-            if let url = URL(string: code.verificationUri) { openURL(url) }
-            let token = try await client.pollForToken(code)
-            try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
+            try await store.addAccountViaDeviceFlow(
+                clientID: effectiveClientID,
+                apiBaseURL: resolvedAddURL,
+                openURL: { openURL($0) },
+                onUserCode: { code in
+                    deviceCode = code
+                    status = .working("Waiting for you to authorize in the browser…")
+                }
+            )
             status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
             resetInputs()
         } catch {
@@ -346,23 +370,10 @@ struct AccountsPane: View {
     }
 }
 
-/// A plain field restyled to sit on the design system: quiet fill, small radius, matching the
-/// height of `GBButtonStyle`. Scoped to Settings' text inputs; not a global component.
-private struct SettingsFieldStyle: ViewModifier {
-    func body(content: Content) -> some View {
-        content
-            .textFieldStyle(.plain)
-            .font(Theme.Typography.caption)
-            .padding(.horizontal, Theme.Spacing.sm)
-            .frame(height: 28)
-            .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
-    }
-}
-
 #if DEBUG
 #Preview("AccountsPane") {
     AccountsPane(store: AppStore())
-        .frame(width: 500, height: 560)
+        .frame(width: Theme.Layout.settingsWidth, height: Theme.Layout.settingsHeight)
         .background(Surface.canvas)
 }
 #endif
