@@ -19,8 +19,9 @@ final class DeviceFlowClientTests: XCTestCase {
         )
     }
 
-    /// A device code whose poll interval is the 1-second floor, expiring far enough out
-    /// that the loop is driven by the mocked responses, not the deadline.
+    /// A device code polling at the client's 1-second floor (`max(interval, 1)`), expiring far
+    /// enough out that the loop is driven by the mocked responses, not the deadline. Each poll
+    /// therefore sleeps a real second — the multi-poll tests cost ~2s wall-clock apiece.
     private func makeCode(expiresIn: Int = 30) -> DeviceFlowClient.DeviceCode {
         .init(
             deviceCode: "device-123",
@@ -125,8 +126,8 @@ final class DeviceFlowClientTests: XCTestCase {
         let counter = CallCounter()
         MockURLProtocol.handler = { request in
             switch counter.next() {
-            // interval 0 keeps the added back-off at zero so the test stays fast; the
-            // branch under test is "slow_down keeps polling instead of throwing".
+            // interval 0 keeps the ADDED back-off at zero (the 1s poll floor still applies);
+            // the branch under test is "slow_down keeps polling instead of throwing".
             case 1: try Self.ok(request, json: #"{"error": "slow_down", "interval": 0}"#)
             default: try Self.ok(request, json: #"{"access_token": "gho_token"}"#)
             }

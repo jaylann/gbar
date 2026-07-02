@@ -422,7 +422,11 @@ extension AppStore {
         guard !accounts.isEmpty else { return }
         isRefreshing = true
         lastErrorMessage = nil
+        // Clear both halves of the expired-session state together — leaving `expiredAccountID`
+        // behind would let `expiredAccount` resolve a stale account mid-refresh, before
+        // `applyErrorState` recomputes the pair.
         sessionExpired = false
+        expiredAccountID = nil
         defer { isRefreshing = false }
 
         // One API client per account (skipping any whose token has gone missing), reused for
