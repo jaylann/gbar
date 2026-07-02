@@ -2,12 +2,43 @@ import AppKit
 import Foundation
 import UserNotifications
 
+/// App-level projection of `UNAuthorizationStatus` — only the states the Settings UI
+/// distinguishes. Keeps `UserNotifications` out of the store and views.
+enum NotificationAuthStatus: Equatable {
+    case notDetermined
+    case denied
+    case authorized
+
+    init(_ status: UNAuthorizationStatus) {
+        switch status {
+        case .notDetermined: self = .notDetermined
+        case .denied: self = .denied
+        default: self = .authorized // .authorized, .provisional, .ephemeral
+        }
+    }
+}
+
 /// The seam the store posts through. A protocol (not the concrete `NotificationService`) so
 /// `AppStore` stays testable — a spy can record posts without touching
 /// `UNUserNotificationCenter`.
 @MainActor
 protocol DesktopNotifying: AnyObject {
     func post(title: String, body: String, url: URL?)
+    @discardableResult
+    func requestAuthorization() async -> Bool
+    func authorizationStatus() async -> NotificationAuthStatus
+}
+
+/// Defaults so simple test doubles only need `post`; the real service overrides both.
+extension DesktopNotifying {
+    @discardableResult
+    func requestAuthorization() async -> Bool {
+        true
+    }
+
+    func authorizationStatus() async -> NotificationAuthStatus {
+        .authorized
+    }
 }
 
 /// Thin `@MainActor` wrapper over `UNUserNotificationCenter`: requests authorization, posts
@@ -28,15 +59,28 @@ final class NotificationService: NSObject, DesktopNotifying {
 
     /// Ask the OS for permission to post notifications. Best-effort: a denial or error just
     /// means no banners fire — the rest of the app is unaffected. Safe to call on every launch.
-    func requestAuthorization() async {
+    @discardableResult
+    func requestAuthorization() async -> Bool {
         do {
             // Call on a fresh `.current()` (a disconnected region) rather than the main-actor
             // stored `center`: awaiting a non-Sendable stored reference trips Swift 6.0's
             // "sending 'self.center' risks data races" (Xcode 16.4); the local doesn't.
-            _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            let granted = try await UNUserNotificationCenter.current()
+                .requestAuthorization(options: [.alert, .sound])
+            if !granted {
+                Log.notifications.info("authorization not granted — banners will not fire")
+            }
+            return granted
         } catch {
             Log.notifications.error("authorization request failed: \(error.localizedDescription, privacy: .public)")
+            return false
         }
+    }
+
+    /// The OS-level authorization state, so the Settings pane can surface a denial instead of
+    /// posts silently no-oping. Same local-`.current()` workaround as `requestAuthorization`.
+    func authorizationStatus() async -> NotificationAuthStatus {
+        await NotificationAuthStatus(UNUserNotificationCenter.current().notificationSettings().authorizationStatus)
     }
 
     /// Post a banner immediately. `url` (if any) rides along in `userInfo` so a click can

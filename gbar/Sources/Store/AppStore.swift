@@ -146,6 +146,10 @@ final class AppStore {
     @ObservationIgnored
     var notifier: (any DesktopNotifying)?
 
+    /// Last observed OS-level notification authorization; nil until first queried. Not
+    /// persisted — always re-read live so it tracks System Settings.
+    var notificationAuthStatus: NotificationAuthStatus?
+
     /// Master switch for desktop notifications, plus per-category toggles. All default on;
     /// persisted like `apiBaseURL`. Inline defaults let the test-only init skip them.
     var notificationsEnabled = true {

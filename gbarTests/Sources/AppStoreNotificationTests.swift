@@ -1,3 +1,4 @@
+import UserNotifications
 import XCTest
 @testable import gbar
 
@@ -12,9 +13,20 @@ final class SpyNotifier: DesktopNotifying {
     }
 
     private(set) var posts: [Post] = []
+    var stubbedAuthStatus: NotificationAuthStatus = .authorized
+    private(set) var authorizationRequests = 0
 
     func post(title: String, body: String, url: URL?) {
         posts.append(Post(title: title, body: body, url: url))
+    }
+
+    func requestAuthorization() async -> Bool {
+        authorizationRequests += 1
+        return stubbedAuthStatus == .authorized
+    }
+
+    func authorizationStatus() async -> NotificationAuthStatus {
+        stubbedAuthStatus
     }
 }
 
@@ -298,5 +310,59 @@ final class AppStoreNotificationTests: XCTestCase {
         )
 
         XCTAssertTrue(spy.posts.isEmpty, "a fresh session must seed silently after sign-out")
+    }
+
+    // MARK: - Authorization
+
+    func testRefreshAuthStatusPublishesDenied() async throws {
+        let store = try makeStore(api: FakeGitHubAPI())
+        let spy = SpyNotifier()
+        spy.stubbedAuthStatus = .denied
+        store.notifier = spy
+
+        await store.refreshNotificationAuthStatus()
+
+        XCTAssertEqual(store.notificationAuthStatus, .denied)
+    }
+
+    func testRefreshAuthStatusWithoutNotifierIsNoOp() async throws {
+        let store = try makeStore(api: FakeGitHubAPI())
+
+        await store.refreshNotificationAuthStatus()
+
+        XCTAssertNil(store.notificationAuthStatus)
+    }
+
+    func testRequestAuthorizationPromptsAndRefreshes() async throws {
+        let store = try makeStore(api: FakeGitHubAPI())
+        let spy = SpyNotifier()
+        spy.stubbedAuthStatus = .notDetermined
+        store.notifier = spy
+
+        // The status published must be the post-request re-read, not the pre-prompt state.
+        spy.stubbedAuthStatus = .authorized
+        await store.requestNotificationAuthorization()
+
+        XCTAssertEqual(spy.authorizationRequests, 1)
+        XCTAssertEqual(store.notificationAuthStatus, .authorized)
+    }
+
+    func testSendTestNotificationPostsThroughNotifier() throws {
+        let store = try makeStore(api: FakeGitHubAPI())
+        let spy = SpyNotifier()
+        store.notifier = spy
+
+        store.sendTestNotification()
+
+        XCTAssertEqual(spy.posts.count, 1)
+        XCTAssertEqual(spy.posts[0].title, "gbar test notification")
+        XCTAssertNil(spy.posts[0].url)
+    }
+
+    func testAuthStatusMapsProvisionalAndEphemeralToAuthorized() {
+        XCTAssertEqual(NotificationAuthStatus(.notDetermined), .notDetermined)
+        XCTAssertEqual(NotificationAuthStatus(.denied), .denied)
+        XCTAssertEqual(NotificationAuthStatus(.authorized), .authorized)
+        XCTAssertEqual(NotificationAuthStatus(.provisional), .authorized)
     }
 }
