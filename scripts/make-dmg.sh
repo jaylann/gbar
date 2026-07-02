@@ -35,18 +35,17 @@ tuist generate --no-open >&2
 
 # Entitlements decision (see gbar/gbar-release.entitlements.template): a team-signed release
 # must keep the App Sandbox AND carry a keychain-access-group, or every Keychain call fails
-# with errSecMissingEntitlement (breaking sign-in + token reads). Developer ID *Manual* signing
-# has no provisioning profile, so we materialize an entitlements file with a literal
-# <team>-prefixed group (valid without a profile — verified) and override CODE_SIGN_ENTITLEMENTS
-# with it. Teamless/ad-hoc builds can't carry a team group, so they keep the non-sandboxed
-# gbar.entitlements (login keychain, no group needed).
+# with errSecMissingEntitlement (breaking sign-in + token reads). But the group can't be set at
+# BUILD time: Xcode's build system demands a provisioning profile the moment a
+# keychain-access-groups entitlement is present under Manual signing, and Developer ID Manual has
+# none. So we build without it, then re-sign the app with `codesign` — which, unlike Xcode,
+# accepts a literal <team>-prefixed group under Developer ID with no profile (verified). Teamless/
+# ad-hoc builds can't carry a team group and ship the non-sandboxed gbar.entitlements as built.
 TEAM=$(grep -oE '^[[:space:]]*GBAR_DEVELOPMENT_TEAM[[:space:]]*=[[:space:]]*[A-Za-z0-9]+' \
     Tuist/Config/Release.xcconfig 2>/dev/null | sed 's/.*=[[:space:]]*//' || true)
-ENT_OVERRIDE=""
 if [ -n "${TEAM:-}" ]; then
     sed "s/__TEAM__/$TEAM/g" gbar/gbar-release.entitlements.template > gbar/gbar-release.entitlements
-    ENT_OVERRIDE="CODE_SIGN_ENTITLEMENTS=gbar/gbar-release.entitlements"
-    echo "==> team-signed release: keychain group ${TEAM}.dev.lanfermann.gbar" >&2
+    echo "==> team-signed release: will re-sign with keychain group ${TEAM}.dev.lanfermann.gbar" >&2
 else
     echo "==> teamless build: non-sandboxed gbar.entitlements (login keychain)" >&2
 fi
@@ -57,10 +56,23 @@ xcodebuild \
     -scheme gbar \
     -configuration Release \
     -derivedDataPath "$DERIVED" \
-    build $ENT_OVERRIDE >&2
+    build >&2
 
 APP=$(find "$DERIVED/Build/Products/Release" -maxdepth 1 -name 'gbar.app' | head -1)
 [ -n "$APP" ] || { echo "gbar.app not found under $DERIVED/Build/Products/Release" >&2; exit 1; }
+
+# Re-sign a team build to add the sandbox + keychain-access-group (see above). Preserve hardened
+# runtime (--options runtime) and a secure timestamp (--timestamp) so the app still notarizes.
+# The signing identity mirrors the DMG signing step (Developer ID Application).
+if [ -n "${TEAM:-}" ]; then
+    IDENTITY=$(grep -oE '^[[:space:]]*GBAR_CODE_SIGN_IDENTITY[[:space:]]*=[[:space:]]*.+' \
+        Tuist/Config/Release.xcconfig 2>/dev/null | sed 's/.*=[[:space:]]*//' || true)
+    IDENTITY=${IDENTITY:-Developer ID Application}
+    echo "==> re-signing app with $IDENTITY + keychain group" >&2
+    codesign --force --options runtime --timestamp \
+        --sign "$IDENTITY" \
+        --entitlements gbar/gbar-release.entitlements "$APP" >&2
+fi
 
 echo "==> packaging DMG" >&2
 cp -R "$APP" "$STAGING/"
