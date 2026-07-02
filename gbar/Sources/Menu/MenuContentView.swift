@@ -57,7 +57,7 @@ struct MenuContentView: View {
     }
 
     var body: some View {
-        PopoverContainer(width: 480, maxHeight: 720) {
+        PopoverContainer(width: Theme.Layout.popoverWidth, maxHeight: Theme.Layout.popoverMaxHeight) {
             VStack(alignment: .leading, spacing: 0) {
                 if store.isSignedIn {
                     header
@@ -79,7 +79,7 @@ struct MenuContentView: View {
             }
             // Give the signed-in popover a comfortable minimum body so a short list still opens
             // tall; the sign-in prompt sizes to its content (`maxHeight` on the container caps both).
-            .frame(minHeight: store.isSignedIn ? 560 : nil)
+            .frame(minHeight: store.isSignedIn ? Theme.Layout.popoverMinHeight : nil)
         }
         // `refresh()` is single-flight, so opening the menu while the background poll loop is
         // mid-fetch coalesces onto that run instead of overlapping it (see AppStore.refresh, #10).

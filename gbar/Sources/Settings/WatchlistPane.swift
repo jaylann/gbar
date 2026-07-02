@@ -172,7 +172,7 @@ struct WatchlistPane: View {
 #if DEBUG
 #Preview("WatchlistPane") {
     WatchlistPane(store: AppStore())
-        .frame(width: 500, height: 560)
+        .frame(width: Theme.Layout.settingsWidth, height: Theme.Layout.settingsHeight)
         .background(Surface.canvas)
 }
 #endif

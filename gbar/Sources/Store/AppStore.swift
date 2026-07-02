@@ -220,8 +220,11 @@ final class AppStore {
     /// persisted as JSON so custom queries and ordering survive relaunches.
     var savedQueries: [SearchQuery.Section] {
         didSet {
-            if let data = try? JSONEncoder().encode(savedQueries) {
+            do {
+                let data = try JSONEncoder().encode(savedQueries)
                 UserDefaults.standard.set(data, forKey: Self.savedQueriesKey)
+            } catch {
+                Log.store.error("saved queries encode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -234,8 +237,11 @@ final class AppStore {
     /// stays bounded and predictable. Persisted as JSON like `savedQueries`.
     var watchlist: [String] {
         didSet {
-            if let data = try? JSONEncoder().encode(watchlist) {
+            do {
+                let data = try JSONEncoder().encode(watchlist)
                 UserDefaults.standard.set(data, forKey: Self.watchlistKey)
+            } catch {
+                Log.store.error("watchlist encode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -277,10 +283,13 @@ final class AppStore {
             savedQueries = SearchQuery.defaults
         }
         // Watchlist starts empty — the Actions/Releases tabs prompt the user to add repos.
-        if let data = UserDefaults.standard.data(forKey: Self.watchlistKey),
-           let decoded = try? JSONDecoder().decode([String].self, from: data)
-        {
-            watchlist = decoded
+        if let data = UserDefaults.standard.data(forKey: Self.watchlistKey) {
+            do {
+                watchlist = try JSONDecoder().decode([String].self, from: data)
+            } catch {
+                Log.store.error("watchlist decode failed: \(error.localizedDescription, privacy: .public)")
+                watchlist = []
+            }
         } else {
             watchlist = []
         }
@@ -298,10 +307,12 @@ final class AppStore {
     /// filter (dropped if it no longer names a live account), and stage any legacy single-token
     /// credential for migration on the next refresh.
     private func restorePersistedAccounts() {
-        if let data = UserDefaults.standard.data(forKey: Self.accountsKey),
-           let decoded = try? JSONDecoder().decode([Account].self, from: data)
-        {
-            accounts = decoded
+        if let data = UserDefaults.standard.data(forKey: Self.accountsKey) {
+            do {
+                accounts = try JSONDecoder().decode([Account].self, from: data)
+            } catch {
+                Log.store.error("accounts decode failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
         if let filter = UserDefaults.standard.string(forKey: Self.accountFilterKey),
            accounts.contains(where: { $0.id == filter })
@@ -668,8 +679,11 @@ extension AppStore {
     }
 
     private func persistAccounts() {
-        if let data = try? JSONEncoder().encode(accounts) {
+        do {
+            let data = try JSONEncoder().encode(accounts)
             UserDefaults.standard.set(data, forKey: Self.accountsKey)
+        } catch {
+            Log.store.error("accounts encode failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

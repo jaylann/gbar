@@ -174,7 +174,7 @@ struct AccountsPane: View {
                 .foregroundStyle(.secondary)
             HStack(spacing: Theme.Spacing.sm) {
                 Text(code)
-                    .font(.system(size: 22, weight: .semibold, design: .monospaced))
+                    .font(Theme.Typography.deviceCode)
                     .tracking(3)
                     .textSelection(.enabled)
                 Spacer(minLength: 0)
@@ -373,7 +373,7 @@ struct AccountsPane: View {
 #if DEBUG
 #Preview("AccountsPane") {
     AccountsPane(store: AppStore())
-        .frame(width: 500, height: 560)
+        .frame(width: Theme.Layout.settingsWidth, height: Theme.Layout.settingsHeight)
         .background(Surface.canvas)
 }
 #endif
