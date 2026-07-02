@@ -10,11 +10,6 @@
 </p>
 
 <p align="center">
-  <em>Like <a href="https://github.com/menubar-apps/PullBar">PullBar</a>, but broader —
-  and source-available.</em>
-</p>
-
-<p align="center">
   <a href="https://github.com/jaylann/gbar/actions/workflows/ci.yml"><img src="https://github.com/jaylann/gbar/actions/workflows/ci.yml/badge.svg?branch=stage" alt="CI"></a>
   <a href="https://github.com/jaylann/gbar/releases/latest"><img src="https://img.shields.io/github/v/release/jaylann/gbar" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue" alt="License: PolyForm Shield 1.0.0"></a>
