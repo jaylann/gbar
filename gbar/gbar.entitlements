@@ -2,15 +2,16 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- App Sandbox: required for Mac App Store & good hygiene for a menu-bar app. -->
-	<key>com.apple.security.app-sandbox</key>
-	<true/>
-	<!-- Outbound HTTPS to the GitHub API (and Enterprise hosts). -->
+	<!-- NOT App-Sandboxed on purpose: this is the Developer-ID / Homebrew distribution
+	     entitlements (and the teamless/ad-hoc fresh-clone default), not a Mac App Store build.
+	     Manual Developer ID signing has no provisioning profile, so it can't be granted a
+	     keychain-access-group — and under App Sandbox, Keychain access *requires* one, so a
+	     sandboxed build with no group fails every SecItem call (errSecMissingEntitlement),
+	     breaking sign-in and token reads. Without the sandbox the app uses the login keychain
+	     directly, no access group needed. A future Mac App Store build would instead need the
+	     sandbox PLUS a real provisioning profile / keychain-access-group. -->
+	<!-- Outbound HTTPS to the GitHub API (Enterprise hosts). Harmless no-op without the sandbox. -->
 	<key>com.apple.security.network.client</key>
 	<true/>
-	<!-- NOTE: no keychain-access-groups here — this is the teamless/ad-hoc default (fresh
-	     clone / CI), where that entitlement would require a provisioning profile and fail the
-	     build. A team-signed build selects gbar-signed.entitlements via GBAR_ENTITLEMENTS,
-	     which adds the group; teamless builds fall back to the file-based keychain. -->
 </dict>
 </plist>

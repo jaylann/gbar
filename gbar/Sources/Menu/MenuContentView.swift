@@ -15,14 +15,14 @@ enum MenuTab: String, CaseIterable {
         case .prs: "PRs"
         case .issues: "Issues"
         case .notifications: "Inbox"
-        case .actions: "Actions"
+        case .actions: "CI"
         case .releases: "Releases"
         }
     }
 }
 
 /// The status-item popover, built on the design system: a consolidated top bar — inline
-/// `PRs | Issues | Inbox` tabs on the left, a search toggle, refresh, and a Settings gear on
+/// top-level tabs on the left, a search toggle, refresh, and a Settings gear on
 /// the right — with a search field that slides in on demand and PR filter chips on the PRs tab.
 /// Below it, the active tab's sections (or its own first-load skeleton / caught-up / error
 /// state). Sign-in prompt when signed out.
@@ -57,7 +57,7 @@ struct MenuContentView: View {
     }
 
     var body: some View {
-        PopoverContainer(width: 420, maxHeight: 720) {
+        PopoverContainer(width: 480, maxHeight: 720) {
             VStack(alignment: .leading, spacing: 0) {
                 if store.isSignedIn {
                     header
@@ -95,7 +95,7 @@ struct MenuContentView: View {
             // Nudge the action icons up so their centers meet the tab labels: the tab bar
             // reserves a 2pt underline anchor below its labels, sitting lower than these
             // fixed-height icon buttons would otherwise center to.
-            HStack(spacing: Theme.Spacing.sm) {
+            HStack(spacing: 0) {
                 if store.accounts.count > 1 {
                     accountFilterMenu
                 }
@@ -121,7 +121,8 @@ struct MenuContentView: View {
             }
             .offset(y: -3)
         }
-        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.leading, Theme.Spacing.md)
+        .padding(.trailing, Theme.Spacing.sm)
         .padding(.vertical, Theme.Spacing.sm)
     }
 

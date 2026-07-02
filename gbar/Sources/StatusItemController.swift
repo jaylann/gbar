@@ -48,11 +48,18 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
         observeBadge()
     }
 
-    /// The status item — not a window — is what keeps this agent app alive. Without this, hiding
-    /// the `SettingsOpener` window (our only `Window` scene) reads as "last window closed" and
-    /// SwiftUI terminates the app right after launch.
+    /// The status item — not a window — is what keeps this agent app alive. Without returning
+    /// `false`, hiding the `SettingsOpener` window (our only `Window` scene) reads as "last window
+    /// closed" and SwiftUI terminates the app right after launch.
+    ///
+    /// This is also the reliable place to drop the Dock icon back to `.accessory`: it fires when the
+    /// last visible window (Settings) closes — at launch when the opener hides, and every time the
+    /// Settings window closes — with the app mid-transition so the switch actually takes effect. The
+    /// same call from the window's `willClose` (app still frontmost) is silently ignored, leaving the
+    /// icon stranded in the Dock. Promotion to `.regular` stays on the explicit open-Settings path.
     func applicationShouldTerminateAfterLastWindowClosed(_: NSApplication) -> Bool {
-        false
+        NSApp.setActivationPolicy(.accessory)
+        return false
     }
 
     // MARK: Status-item button
