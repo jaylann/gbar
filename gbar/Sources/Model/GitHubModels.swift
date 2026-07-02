@@ -192,6 +192,92 @@ struct CheckRunsResponse: Decodable {
     }
 }
 
+/// One starred repository (`GET /user/starred`). We only need the `owner/name` slug — the
+/// starred set is a cross-cutting signal (which of my rows sit on a repo I star) plus a
+/// per-tab filter, not a browsable list.
+struct StarredRepo: Decodable {
+    let fullName: String
+
+    enum CodingKeys: String, CodingKey {
+        case fullName = "full_name"
+    }
+}
+
+/// One GitHub Actions workflow run (`GET /repos/{owner}/{repo}/actions/runs`). Unlike the
+/// PR-scoped check runs, this surfaces runs on branches with no PR, scheduled/cron workflows,
+/// and manual dispatches. `status` is the lifecycle (`queued`/`in_progress`/`completed`);
+/// `conclusion` is the outcome, populated only once `status == completed`.
+struct WorkflowRun: Decodable, Identifiable {
+    let id: Int
+    /// The workflow's name (e.g. "CI"). Shown as the row's secondary identity.
+    let name: String
+    /// GitHub's human title for the run (commit message / PR title). Falls back to `name` in the
+    /// UI when absent so the row always has a title.
+    let displayTitle: String?
+    let headBranch: String?
+    /// What triggered the run: `push`, `schedule`, `workflow_dispatch`, `pull_request`, …
+    let event: String
+    let status: String
+    let conclusion: String?
+    let htmlURL: String
+    let runNumber: Int
+    let createdAt: Date
+    let updatedAt: Date
+    /// When the run actually began executing — preferred over `createdAt` for the duration.
+    let runStartedAt: Date?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case name
+        case displayTitle = "display_title"
+        case headBranch = "head_branch"
+        case event
+        case status
+        case conclusion
+        case htmlURL = "html_url"
+        case runNumber = "run_number"
+        case createdAt = "created_at"
+        case updatedAt = "updated_at"
+        case runStartedAt = "run_started_at"
+    }
+}
+
+/// The envelope `GET .../actions/runs` returns: a total plus the runs themselves.
+struct WorkflowRunsResponse: Decodable {
+    let workflowRuns: [WorkflowRun]
+
+    enum CodingKeys: String, CodingKey {
+        case workflowRuns = "workflow_runs"
+    }
+}
+
+/// One release (`GET /repos/{owner}/{repo}/releases`) — a "what shipped" entry for a watched
+/// repo. `name` is the human title (often blank, in which case the UI shows the tag);
+/// `publishedAt` is nil for drafts, so the digest sorts on `publishedAt ?? createdAt`.
+struct Release: Decodable, Identifiable {
+    let id: Int
+    let tagName: String
+    let name: String?
+    let htmlURL: String
+    let publishedAt: Date?
+    let createdAt: Date
+    let draft: Bool
+    let prerelease: Bool
+    let author: GitHubUser?
+
+    enum CodingKeys: String, CodingKey {
+        case id
+        case tagName = "tag_name"
+        case name
+        case htmlURL = "html_url"
+        case publishedAt = "published_at"
+        case createdAt = "created_at"
+        case draft
+        case prerelease
+        case author
+    }
+}
+
 /// One item from `GET /notifications` — an unread/read thread pointing at a PR, issue, etc.
 struct GitHubNotification: Decodable, Identifiable {
     struct Subject: Decodable {

@@ -6,7 +6,7 @@ import Foundation
 extension NotificationRow.Model {
     /// Map a `/notifications` thread into the row's display model. Reason strings and subject
     /// types follow the REST API's vocabulary; unknown values fall back to sensible defaults.
-    init(_ notification: GitHubNotification) {
+    init(_ notification: GitHubNotification, isStarred: Bool = false) {
         self.init(
             id: notification.id,
             repo: notification.repository.fullName,
@@ -14,7 +14,8 @@ extension NotificationRow.Model {
             reason: Self.reason(from: notification.reason),
             date: notification.updatedAt,
             isUnread: notification.unread,
-            symbol: Self.symbol(forSubjectType: notification.subject.type)
+            symbol: Self.symbol(forSubjectType: notification.subject.type),
+            isStarred: isStarred
         )
     }
 

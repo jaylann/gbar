@@ -101,6 +101,17 @@ struct FakeGitHubAPI: GitHubAPI {
     var checkRunsError: Error?
     /// Returned by `currentUser()` — the account a token resolves to when validated/added.
     var currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
+    /// Returned by `starredRepos()` — the `owner/name` slugs the account has starred.
+    var starredResult: [String] = []
+    /// When set, only `starredRepos()` throws — lets tests exercise the best-effort guarantee
+    /// (a failed starred fetch never surfaces an error message, just skips advancing the set).
+    var starredError: Error?
+    /// Returned by `workflowRuns(repo:)`, keyed by exact slug (falling back to the default).
+    var workflowRunsByRepo: [String: [WorkflowRun]] = [:]
+    var workflowRunsResult: [WorkflowRun] = []
+    /// Returned by `releases(repo:)`, keyed by exact slug (falling back to the default).
+    var releasesByRepo: [String: [Release]] = [:]
+    var releasesResult: [Release] = []
 
     func currentUser() async throws -> GitHubUser {
         if let error {
@@ -174,6 +185,27 @@ struct FakeGitHubAPI: GitHubAPI {
             throw error
         }
         return notificationsResult
+    }
+
+    func starredRepos() async throws -> [String] {
+        if let error = starredError ?? error {
+            throw error
+        }
+        return starredResult
+    }
+
+    func workflowRuns(repo: String) async throws -> [WorkflowRun] {
+        if let error {
+            throw error
+        }
+        return workflowRunsByRepo[repo] ?? workflowRunsResult
+    }
+
+    func releases(repo: String) async throws -> [Release] {
+        if let error {
+            throw error
+        }
+        return releasesByRepo[repo] ?? releasesResult
     }
 }
 
@@ -259,23 +291,35 @@ actor GatedGitHubAPI: GitHubAPI {
     func notifications() async throws -> [GitHubNotification] {
         throw Unstubbed.notImplemented
     }
+
+    func starredRepos() async throws -> [String] {
+        []
+    }
+
+    func workflowRuns(repo _: String) async throws -> [WorkflowRun] {
+        []
+    }
+
+    func releases(repo _: String) async throws -> [Release] {
+        []
+    }
 }
 
 extension SearchIssue {
     /// Builds a minimal `SearchIssue` for tests by decoding a synthetic payload, so tests
     /// don't depend on the (non-public) memberwise initializer.
-    static func stub(id: Int, number: Int = 1, title: String = "Stub") -> SearchIssue {
+    static func stub(id: Int, number: Int = 1, title: String = "Stub", repo: String = "octo/repo") -> SearchIssue {
         let json = """
         {
           "id": \(id),
           "number": \(number),
           "title": "\(title)",
-          "html_url": "https://github.com/octo/repo/pull/\(number)",
+          "html_url": "https://github.com/\(repo)/pull/\(number)",
           "state": "open",
           "created_at": "2026-01-01T00:00:00Z",
           "user": { "login": "jaylann", "avatar_url": null },
-          "repository_url": "https://api.github.com/repos/octo/repo",
-          "pull_request": { "html_url": "https://github.com/octo/repo/pull/\(number)", "merged_at": null },
+          "repository_url": "https://api.github.com/repos/\(repo)",
+          "pull_request": { "html_url": "https://github.com/\(repo)/pull/\(number)", "merged_at": null },
           "draft": false
         }
         """
@@ -415,6 +459,79 @@ extension RepositoryInfo {
             fatalError("RepositoryInfo.stub produced invalid JSON")
         }
         return info
+    }
+}
+
+extension WorkflowRun {
+    /// A single workflow-run stub with an explicit lifecycle/outcome and trigger event.
+    static func stub(
+        id: Int = 1,
+        name: String = "CI",
+        displayTitle: String? = "Fix the thing",
+        headBranch: String? = "stage",
+        event: String = "push",
+        status: String = "completed",
+        conclusion: String? = "success",
+        runNumber: Int = 1,
+        updatedAt: String = "2026-01-01T00:01:42Z"
+    )
+    -> WorkflowRun {
+        let displayTitleJSON = displayTitle.map { "\"\($0)\"" } ?? "null"
+        let headBranchJSON = headBranch.map { "\"\($0)\"" } ?? "null"
+        let conclusionJSON = conclusion.map { "\"\($0)\"" } ?? "null"
+        let json = """
+        {
+          "id": \(id),
+          "name": "\(name)",
+          "display_title": \(displayTitleJSON),
+          "head_branch": \(headBranchJSON),
+          "event": "\(event)",
+          "status": "\(status)",
+          "conclusion": \(conclusionJSON),
+          "html_url": "https://github.com/octo/repo/actions/runs/\(id)",
+          "run_number": \(runNumber),
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "\(updatedAt)",
+          "run_started_at": "2026-01-01T00:00:00Z"
+        }
+        """
+        guard let run = try? testDecoder.decode(WorkflowRun.self, from: Data(json.utf8)) else {
+            fatalError("WorkflowRun.stub produced invalid JSON")
+        }
+        return run
+    }
+}
+
+extension Release {
+    /// A single release stub. `publishedAt` nil emits a draft-shaped payload.
+    static func stub(
+        id: Int = 1,
+        tagName: String = "v1.0.0",
+        name: String? = "v1.0.0",
+        publishedAt: String? = "2026-01-01T00:00:00Z",
+        draft: Bool = false,
+        prerelease: Bool = false
+    )
+    -> Release {
+        let nameJSON = name.map { "\"\($0)\"" } ?? "null"
+        let publishedJSON = publishedAt.map { "\"\($0)\"" } ?? "null"
+        let json = """
+        {
+          "id": \(id),
+          "tag_name": "\(tagName)",
+          "name": \(nameJSON),
+          "html_url": "https://github.com/octo/repo/releases/tag/\(tagName)",
+          "published_at": \(publishedJSON),
+          "created_at": "2026-01-01T00:00:00Z",
+          "draft": \(draft),
+          "prerelease": \(prerelease),
+          "author": { "login": "jaylann", "avatar_url": null }
+        }
+        """
+        guard let release = try? testDecoder.decode(Release.self, from: Data(json.utf8)) else {
+            fatalError("Release.stub produced invalid JSON")
+        }
+        return release
     }
 }
 

@@ -16,6 +16,7 @@ struct SettingsView: View {
     private enum Tab: Hashable {
         case accounts
         case queries
+        case watchlist
         case general
     }
 
@@ -52,6 +53,7 @@ struct SettingsView: View {
         [
             .init(tag: .accounts, title: "Accounts", count: store.accounts.isEmpty ? nil : store.accounts.count),
             .init(tag: .queries, title: "Queries", count: store.savedQueries.isEmpty ? nil : store.savedQueries.count),
+            .init(tag: .watchlist, title: "Watchlist", count: store.watchlist.isEmpty ? nil : store.watchlist.count),
             .init(tag: .general, title: "General"),
         ]
     }
@@ -61,6 +63,7 @@ struct SettingsView: View {
         switch tab {
         case .accounts: AccountsPane(store: store)
         case .queries: QueriesPane(store: store)
+        case .watchlist: WatchlistPane(store: store)
         case .general: GeneralPane(store: store)
         }
     }

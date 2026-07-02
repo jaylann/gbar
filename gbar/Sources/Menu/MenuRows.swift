@@ -107,7 +107,7 @@ struct PRRowItem: View {
                 Button {
                     if let url = URL(string: issue.htmlURL) { openURL(url) }
                 } label: {
-                    PRRow(issue: issue, ci: checks?.status)
+                    PRRow(issue: issue, ci: checks?.status, isStarred: store.isStarred(item))
                 }
                 .buttonStyle(.plain)
                 // Keep the hover-gated Approve/Merge reachable via VoiceOver's actions rotor —
@@ -341,6 +341,54 @@ private struct ApproveComposer: View {
         // runloop tick (after the morph settles) so the caret reliably lands without a click.
         // The menu-bar panel is key, so it receives keystrokes (see `SearchField`).
         .onAppear { DispatchQueue.main.async { focus.wrappedValue = true } }
+    }
+}
+
+/// An Actions workflow-run list row: tap to open the run on GitHub. Read-only — Actions has no
+/// per-row quick action in this pass, so it composes the plain `HoverRow` (plus the merged-view
+/// account avatar, like the other tabs).
+struct ActionRunRowItem: View {
+    let item: AccountActionRun
+    let showAccountBadge: Bool
+    var isStarred = false
+    var openURL: (URL) -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            if showAccountBadge {
+                Avatar(login: item.account.login, url: item.account.avatarImageURL, size: .small)
+                    .gbTooltip(item.account.login)
+            }
+            Button {
+                if let url = URL(string: item.run.htmlURL) { openURL(url) }
+            } label: {
+                HoverRow { ActionRunRow(model: ActionRunRow.Model(item, isStarred: isStarred)) }
+            }
+            .buttonStyle(.plain)
+        }
+    }
+}
+
+/// A release list row: tap to open the release page on GitHub.
+struct ReleaseRowItem: View {
+    let item: AccountRelease
+    let showAccountBadge: Bool
+    var isStarred = false
+    var openURL: (URL) -> Void
+
+    var body: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            if showAccountBadge {
+                Avatar(login: item.account.login, url: item.account.avatarImageURL, size: .small)
+                    .gbTooltip(item.account.login)
+            }
+            Button {
+                if let url = URL(string: item.release.htmlURL) { openURL(url) }
+            } label: {
+                HoverRow { ReleaseRow(model: ReleaseRow.Model(item, isStarred: isStarred)) }
+            }
+            .buttonStyle(.plain)
+        }
     }
 }
 

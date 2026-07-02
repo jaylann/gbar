@@ -44,6 +44,13 @@ protocol GitHubAPI: Sendable {
     func notifications() async throws -> [GitHubNotification]
     /// Fetch the check runs for a commit (`owner/name` slug + git ref/SHA).
     func checkRuns(repo: String, ref: String) async throws -> [CheckRun]
+    /// Fetch the `owner/name` slugs of every repository the viewer has starred. Paginated
+    /// internally; the result is a cross-tab "starred" signal, not a browsable list.
+    func starredRepos() async throws -> [String]
+    /// Fetch the most recent GitHub Actions workflow runs for a repo (`owner/name` slug).
+    func workflowRuns(repo: String) async throws -> [WorkflowRun]
+    /// Fetch the most recent releases for a repo (`owner/name` slug).
+    func releases(repo: String) async throws -> [Release]
 }
 
 /// Live GitHub REST client. v1 uses polling over `/search/issues`; richer surfaces
@@ -145,6 +152,59 @@ struct GitHubClient: GitHubAPI {
         return try Self.decoder.decode(CheckRunsResponse.self, from: data).checkRuns
     }
 
+    /// Max pages of starred repos to walk. `starredPerPage` (100) × this cap bounds how many
+    /// slugs the signal covers — plenty for a membership check, and a hard stop so an account
+    /// that stars thousands of repos can't stall a refresh.
+    static let starredPageCap = 5
+    static let starredPerPage = 100
+
+    func starredRepos() async throws -> [String] {
+        var slugs: [String] = []
+        var page = 1
+        while page <= Self.starredPageCap {
+            let request = try makeRequest(
+                path: "user/starred",
+                queryItems: [
+                    URLQueryItem(name: "per_page", value: String(Self.starredPerPage)),
+                    URLQueryItem(name: "page", value: String(page)),
+                ]
+            )
+            let (data, response) = try await executeWithResponse(request)
+            try slugs.append(contentsOf: Self.decoder.decode([StarredRepo].self, from: data).map(\.fullName))
+            // Stop as soon as GitHub reports no `rel="next"` — the last page is usually short of
+            // `per_page`, so this avoids a wasted trailing request.
+            guard Self.hasNextPage(response) else { return slugs }
+            page += 1
+        }
+        Log.network
+            .info("starred list truncated at \(Self.starredPageCap * Self.starredPerPage, privacy: .public) repos")
+        return slugs
+    }
+
+    func workflowRuns(repo: String) async throws -> [WorkflowRun] {
+        let request = try makeRequest(
+            path: "repos/\(repo)/actions/runs",
+            queryItems: [URLQueryItem(name: "per_page", value: "10")]
+        )
+        let data = try await execute(request)
+        return try Self.decoder.decode(WorkflowRunsResponse.self, from: data).workflowRuns
+    }
+
+    func releases(repo: String) async throws -> [Release] {
+        let request = try makeRequest(
+            path: "repos/\(repo)/releases",
+            queryItems: [URLQueryItem(name: "per_page", value: "5")]
+        )
+        let data = try await execute(request)
+        return try Self.decoder.decode([Release].self, from: data)
+    }
+
+    /// Whether the response's `Link` header advertises a `rel="next"` page.
+    private static func hasNextPage(_ response: HTTPURLResponse) -> Bool {
+        guard let link = response.value(forHTTPHeaderField: "Link") else { return false }
+        return link.contains("rel=\"next\"")
+    }
+
     // MARK: - Request plumbing
 
     /// A JSON decoder configured the way every GitHub response expects.
@@ -190,10 +250,16 @@ struct GitHubClient: GitHubAPI {
 
     /// Run a request and return its body, throwing `ClientError.http` on any non-2xx status.
     private func execute(_ request: URLRequest) async throws -> Data {
+        try await executeWithResponse(request).0
+    }
+
+    /// Run a request and return its body **and** response, throwing `ClientError.http` on any
+    /// non-2xx status. Used where a response header matters (e.g. the `Link` pagination cursor).
+    private func executeWithResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ClientError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
         }
-        return data
+        return (data, http)
     }
 }

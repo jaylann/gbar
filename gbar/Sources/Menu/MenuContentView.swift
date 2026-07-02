@@ -3,43 +3,20 @@ import SwiftUI
 /// The top-level domains the menu switches between. PRs and Issues are both
 /// `/search/issues`-driven (saved-query sections routed by `LoadedSection.kind`);
 /// Notifications is its own data source.
-private enum MenuTab: String, CaseIterable {
+enum MenuTab: String, CaseIterable {
     case prs
     case issues
     case notifications
+    case actions
+    case releases
 
     var title: String {
         switch self {
         case .prs: "PRs"
         case .issues: "Issues"
         case .notifications: "Inbox"
-        }
-    }
-}
-
-/// Single-select filter mode for the PRs tab, surfaced as `FilterChip`s. `needsReview` is
-/// approximated by membership in the built-in `review-requested` section (per-item review
-/// state isn't loaded, and this pass adds no new API surface).
-private enum PRFilter {
-    case all
-    case failingCI
-    case needsReview
-}
-
-/// Single-select filter mode for the Inbox tab, surfaced as `FilterChip`s. Matches the raw
-/// REST `reason` strings directly (rather than `NotificationRow.Model.Reason`) so filtering
-/// stays decoupled from the row's display mapping.
-private enum InboxReason {
-    case all
-    case reviewRequested
-    case mentioned
-    case assigned
-    func matches(_ raw: String) -> Bool {
-        switch self {
-        case .all: true
-        case .reviewRequested: raw == "review_requested"
-        case .mentioned: raw == "mention"
-        case .assigned: raw == "assign"
+        case .actions: "Actions"
+        case .releases: "Releases"
         }
     }
 }
@@ -60,11 +37,15 @@ struct MenuContentView: View {
     @AppStorage("gbar.menu.selectedTab") private var selectedTabRaw = MenuTab.prs.rawValue
     @State private var searchText = ""
     @State private var searchActive = false
-    @State private var prFilter: PRFilter = .all
-    @State private var inboxReason: InboxReason = .all
+    /// Filter state is `internal` (not `private`) so the chip UI in `MenuFilters.swift` can bind
+    /// to it: `prFilter`/`inboxReason` are radio state, `starredOnly` the cross-tab toggle.
+    @State var prFilter: PRFilter = .all
+    /// Cross-tab toggle: narrow the active tab to rows on repos the viewer has starred.
+    @State var starredOnly = false
+    @State var inboxReason: InboxReason = .all
     @FocusState private var searchFocused: Bool
 
-    private var selectedTab: MenuTab {
+    var selectedTab: MenuTab {
         MenuTab(rawValue: selectedTabRaw) ?? .prs
     }
 
@@ -85,11 +66,8 @@ struct MenuContentView: View {
                     if showsFilters, searchActive {
                         searchRow
                     }
-                    if showsFilters, selectedTab == .prs {
-                        prChipsRow
-                    }
-                    if showsFilters, selectedTab == .notifications {
-                        inboxChipsRow
+                    if showsFilters {
+                        chipsRow
                     }
                     Divider()
                     tabContent
@@ -194,37 +172,6 @@ struct MenuContentView: View {
             .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    private var prChipsRow: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            FilterChip(title: "All", isOn: chipBinding(.all))
-            FilterChip(title: "Failing CI", symbol: "xmark.octagon", isOn: chipBinding(.failingCI))
-            FilterChip(title: "Needs review", symbol: "eye", isOn: chipBinding(.needsReview))
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.bottom, Theme.Spacing.sm)
-    }
-
-    /// Reason filter chips for the Inbox, plus a trailing "Mark all read" that only appears
-    /// with unread present and no active filter — so "all" is never ambiguous. Repo scoping is
-    /// intentionally left to the free-text search (which matches `repository.fullName`).
-    private var inboxChipsRow: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            FilterChip(title: "All", isOn: inboxChipBinding(.all))
-            FilterChip(title: "Review requested", symbol: "eye", isOn: inboxChipBinding(.reviewRequested))
-            FilterChip(title: "Mentioned", symbol: "at", isOn: inboxChipBinding(.mentioned))
-            FilterChip(title: "Assigned", symbol: "person", isOn: inboxChipBinding(.assigned))
-            Spacer(minLength: 0)
-            if !isFiltering, store.unreadNotificationCount > 0 {
-                Button("Mark all read") { Task { await store.markAllRead() } }
-                    .buttonStyle(GBButtonStyle(variant: .ghost))
-                    .gbTooltip("Mark all as read", edge: .bottom)
-            }
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.bottom, Theme.Spacing.sm)
-    }
-
     private var tabItems: [InlineTabBar<MenuTab>.Tab] {
         MenuTab.allCases.map { .init(tag: $0, title: $0.title, count: badge(for: $0)) }
     }
@@ -255,6 +202,9 @@ struct MenuContentView: View {
         case .prs: store.prCount
         case .issues: store.issueCount
         case .notifications: store.unreadNotificationCount
+        // Actions surfaces the actionable count (failing / running); Releases is informational.
+        case .actions: store.actionRunsAttentionCount
+        case .releases: 0
         }
         return count > 0 ? count : nil
     }
@@ -264,31 +214,19 @@ struct MenuContentView: View {
         case .prs: "Filter pull requests"
         case .issues: "Filter issues"
         case .notifications: "Filter inbox"
+        case .actions: "Filter runs"
+        case .releases: "Filter releases"
         }
-    }
-
-    /// Drives a `FilterChip` as a radio button: turning one on selects that mode; turning the
-    /// active one off resets to `.all`.
-    private func chipBinding(_ filter: PRFilter) -> Binding<Bool> {
-        Binding(
-            get: { prFilter == filter },
-            set: { isOn in prFilter = isOn ? filter : .all }
-        )
-    }
-
-    /// Radio-style binding for the Inbox reason chips, mirroring `chipBinding`.
-    private func inboxChipBinding(_ reason: InboxReason) -> Binding<Bool> {
-        Binding(
-            get: { inboxReason == reason },
-            set: { isOn in inboxReason = isOn ? reason : .all }
-        )
     }
 
     // MARK: Per-tab content
 
     @ViewBuilder
     private var tabContent: some View {
-        if !store.hasLoaded {
+        // The Actions/Releases tabs load on their own (repo-feeds) wave — keep their skeleton up
+        // until that wave finishes, independent of the section/inbox first load.
+        let repoFeedTab = selectedTab == .actions || selectedTab == .releases
+        if !store.hasLoaded || (repoFeedTab && !store.hasLoadedRepoFeeds) {
             // Fill the taller body from the top so the skeleton reads like the list it stands
             // in for, rather than a short block floating mid-popover.
             LoadingView(rows: 8)
@@ -300,6 +238,8 @@ struct MenuContentView: View {
             case .prs: prList
             case .issues: issueList
             case .notifications: notificationList
+            case .actions: actionList
+            case .releases: releaseList
             }
         }
     }
@@ -311,6 +251,8 @@ struct MenuContentView: View {
     private var storeIsEmpty: Bool {
         (store.prSections + store.issueSections).allSatisfy(\.items.isEmpty)
             && store.visibleNotifications.isEmpty
+            && store.visibleActionRuns.isEmpty
+            && store.visibleReleases.isEmpty
     }
 
     /// Show the search field and PR filter chips only when there's a loaded, filterable list —
@@ -320,7 +262,9 @@ struct MenuContentView: View {
     }
 
     private var prList: some View {
-        let groups = filteredSections(store.prSections) { matchesSearch($0.item.issue) && prPredicate($0) }
+        let groups = filteredSections(store.prSections) {
+            matchesSearch($0.item.issue) && prPredicate($0) && starredPredicate($0.item)
+        }
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No pull requests", caughtUpMessage: "Nothing needs you right now.")
         } content: {
@@ -337,7 +281,9 @@ struct MenuContentView: View {
     }
 
     private var issueList: some View {
-        let groups = filteredSections(store.issueSections) { matchesSearch($0.item.issue) }
+        let groups = filteredSections(store.issueSections) {
+            matchesSearch($0.item.issue) && starredPredicate($0.item)
+        }
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No issues", caughtUpMessage: "No issues assigned to you.")
         } content: {
@@ -355,7 +301,9 @@ struct MenuContentView: View {
 
     private var notificationList: some View {
         let items = store.visibleNotifications.filter {
-            matchesSearch($0.notification) && inboxReason.matches($0.notification.reason)
+            matchesSearch($0.notification)
+                && inboxReason.matches($0.notification.reason)
+                && (!starredOnly || store.isStarred($0))
         }
         return tabScaffold(isEmpty: items.isEmpty) {
             emptyState(caughtUpTitle: "Inbox zero", caughtUpMessage: "Nothing unread right now.")
@@ -481,10 +429,16 @@ extension MenuContentView {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var isFiltering: Bool {
+    var isFiltering: Bool {
         !trimmedSearch.isEmpty
+            || starredOnly
             || (selectedTab == .prs && prFilter != .all)
             || (selectedTab == .notifications && inboxReason != .all)
+    }
+
+    /// The cross-tab Starred predicate for a PR/issue item — pass-through unless the toggle is on.
+    private func starredPredicate(_ item: AccountItem) -> Bool {
+        !starredOnly || store.isStarred(item)
     }
 
     private func matchesSearch(_ item: SearchIssue) -> Bool {
@@ -497,6 +451,23 @@ extension MenuContentView {
         guard !trimmedSearch.isEmpty else { return true }
         return notification.subject.title.localizedCaseInsensitiveContains(trimmedSearch)
             || notification.repository.fullName.localizedCaseInsensitiveContains(trimmedSearch)
+    }
+
+    private func matchesSearch(_ item: AccountActionRun) -> Bool {
+        guard !trimmedSearch.isEmpty else { return true }
+        let run = item.run
+        return item.repo.localizedCaseInsensitiveContains(trimmedSearch)
+            || run.name.localizedCaseInsensitiveContains(trimmedSearch)
+            || (run.displayTitle?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
+            || (run.headBranch?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
+    }
+
+    private func matchesSearch(_ item: AccountRelease) -> Bool {
+        guard !trimmedSearch.isEmpty else { return true }
+        let release = item.release
+        return item.repo.localizedCaseInsensitiveContains(trimmedSearch)
+            || release.tagName.localizedCaseInsensitiveContains(trimmedSearch)
+            || (release.name?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
     }
 
     private func prPredicate(_ entry: (section: LoadedSection, item: AccountItem)) -> Bool {
@@ -537,7 +508,7 @@ extension MenuContentView {
         Button {
             if let url = URL(string: item.issue.htmlURL) { openURL(url) }
         } label: {
-            HoverRow { IssueRow(issue: item.issue) }
+            HoverRow { IssueRow(issue: item.issue, isStarred: store.isStarred(item)) }
         }
         .buttonStyle(.plain)
     }
@@ -567,7 +538,7 @@ extension MenuContentView {
                 Button {
                     if let url = notification.htmlURL(apiBaseURL: item.account.apiBaseURL) { openURL(url) }
                 } label: {
-                    NotificationRow(model: NotificationRow.Model(notification))
+                    NotificationRow(model: NotificationRow.Model(notification, isStarred: store.isStarred(item)))
                 }
                 .buttonStyle(.plain)
                 // The visible mark-read button is hover-gated; keep the action reachable via
@@ -576,6 +547,60 @@ extension MenuContentView {
                     if notification.unread { Task { await store.markRead(item) } }
                 }
             })
+        }
+    }
+}
+
+/// The Actions and Releases tabs — the per-repo feeds over the watchlist. Split into their own
+/// extension so the primary view body stays within the type-length limit.
+extension MenuContentView {
+    var actionList: some View {
+        let items = store.visibleActionRuns.filter {
+            matchesSearch($0) && (!starredOnly || store.isStarred($0))
+        }
+        return tabScaffold(isEmpty: items.isEmpty) {
+            repoFeedEmptyState(
+                caughtUpTitle: "No recent runs",
+                caughtUpMessage: "No workflow runs in your watched repos."
+            )
+        } content: {
+            ForEach(items) { item in
+                ActionRunRowItem(item: item, showAccountBadge: showsAccountBadges, isStarred: store.isStarred(item)) {
+                    openURL($0)
+                }
+            }
+        }
+    }
+
+    var releaseList: some View {
+        let items = store.visibleReleases.filter {
+            matchesSearch($0) && (!starredOnly || store.isStarred($0))
+        }
+        return tabScaffold(isEmpty: items.isEmpty) {
+            repoFeedEmptyState(caughtUpTitle: "No releases yet", caughtUpMessage: "No releases in your watched repos.")
+        } content: {
+            ForEach(items) { item in
+                ReleaseRowItem(item: item, showAccountBadge: showsAccountBadges, isStarred: store.isStarred(item)) {
+                    openURL($0)
+                }
+            }
+        }
+    }
+
+    /// Empty state for the Actions/Releases tabs. When no repos are watched, nudge the user to
+    /// Settings (there's nothing to fetch) rather than showing a misleading "caught up" reward.
+    private func repoFeedEmptyState(caughtUpTitle: String, caughtUpMessage: String) -> some View {
+        if isFiltering {
+            EmptyStateView(intent: .neutral, title: "No matches", message: "Try a different search or filter.")
+        } else if store.watchlist.isEmpty {
+            EmptyStateView(
+                intent: .neutral,
+                title: "No repos watched",
+                message: "Add repos in Settings ▸ Watchlist to follow their Actions and releases.",
+                actionTitle: "Open Settings…"
+            ) { openSettingsWindow() }
+        } else {
+            EmptyStateView(intent: .caughtUp, title: caughtUpTitle, message: caughtUpMessage)
         }
     }
 }

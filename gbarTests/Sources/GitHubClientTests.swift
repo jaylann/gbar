@@ -213,6 +213,150 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(info.permissions?.maintain, true)
         XCTAssertEqual(info.permissions?.admin, false)
     }
+
+    // MARK: - Starred (pagination)
+
+    func testStarredReposFollowsLinkHeaderAcrossPages() async throws {
+        let counter = PageCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value ?? "1"
+            counter.record(page)
+            // Two pages: page 1 advertises a next link, page 2 doesn't.
+            let hasNext = page == "1"
+            let headers = hasNext
+                ? ["Link": "<https://api.github.com/user/starred?page=2>; rel=\"next\""]
+                : [:]
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)
+            )
+            let body = page == "1"
+                ? #"[{"full_name":"octo/one"},{"full_name":"octo/two"}]"#
+                : #"[{"full_name":"octo/three"}]"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let slugs = try await client.starredRepos()
+
+        // Walked exactly two pages (stopped when the Link header dropped rel="next").
+        XCTAssertEqual(counter.pages, ["1", "2"])
+        XCTAssertEqual(slugs, ["octo/one", "octo/two", "octo/three"])
+    }
+
+    func testStarredReposStopsWithoutLinkHeader() async throws {
+        let counter = PageCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value ?? "1"
+            counter.record(page)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            return (response, Data(#"[{"full_name":"octo/only"}]"#.utf8))
+        }
+
+        let client = try makeClient()
+        let slugs = try await client.starredRepos()
+
+        // No Link header → single request, no needless second page.
+        XCTAssertEqual(counter.pages, ["1"])
+        XCTAssertEqual(slugs, ["octo/only"])
+    }
+
+    // MARK: - Actions runs / Releases
+
+    func testWorkflowRunsDecodesEnvelope() async throws {
+        let pathBox = HeaderBox()
+        MockURLProtocol.handler = { request in
+            pathBox.path = request.url?.path
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            {
+              "total_count": 1,
+              "workflow_runs": [{
+                "id": 500,
+                "name": "CI",
+                "display_title": "Fix the thing",
+                "head_branch": "stage",
+                "event": "push",
+                "status": "completed",
+                "conclusion": "success",
+                "html_url": "https://github.com/octo/repo/actions/runs/500",
+                "run_number": 12,
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:01:42Z",
+                "run_started_at": "2026-01-01T00:00:00Z"
+              }]
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let runs = try await client.workflowRuns(repo: "octo/repo")
+
+        XCTAssertEqual(pathBox.path, "/repos/octo/repo/actions/runs")
+        XCTAssertEqual(runs.count, 1)
+        let first = try XCTUnwrap(runs.first)
+        XCTAssertEqual(first.id, 500)
+        XCTAssertEqual(first.displayTitle, "Fix the thing")
+        XCTAssertEqual(first.event, "push")
+        XCTAssertEqual(first.ciStatus, .success)
+    }
+
+    func testReleasesDecodesArray() async throws {
+        let pathBox = HeaderBox()
+        MockURLProtocol.handler = { request in
+            pathBox.path = request.url?.path
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            [{
+              "id": 900,
+              "tag_name": "v1.2.0",
+              "name": "Inbox & quick actions",
+              "html_url": "https://github.com/octo/repo/releases/tag/v1.2.0",
+              "published_at": "2026-01-01T00:00:00Z",
+              "created_at": "2026-01-01T00:00:00Z",
+              "draft": false,
+              "prerelease": false,
+              "author": { "login": "jaylann", "avatar_url": null }
+            }]
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let releases = try await client.releases(repo: "octo/repo")
+
+        XCTAssertEqual(pathBox.path, "/repos/octo/repo/releases")
+        XCTAssertEqual(releases.count, 1)
+        let first = try XCTUnwrap(releases.first)
+        XCTAssertEqual(first.tagName, "v1.2.0")
+        XCTAssertEqual(first.name, "Inbox & quick actions")
+        XCTAssertFalse(first.prerelease)
+    }
+}
+
+/// Records the `page` query values a paginated request walks through, in order.
+private final class PageCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _pages: [String] = []
+    var pages: [String] {
+        lock.withLock { _pages }
+    }
+
+    func record(_ page: String) {
+        lock.withLock { _pages.append(page) }
+    }
 }
 
 /// Reference box so the `@Sendable` handler can hand captured request headers back to the test.

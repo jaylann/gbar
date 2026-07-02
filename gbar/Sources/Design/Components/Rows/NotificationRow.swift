@@ -30,6 +30,7 @@ struct NotificationRow: View {
         let date: Date
         var isUnread: Bool
         var symbol = "bell"
+        var isStarred = false
     }
 
     let model: Model
@@ -47,6 +48,7 @@ struct NotificationRow: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 HStack(spacing: Theme.Spacing.xs) {
+                    StarMarker(isStarred: model.isStarred)
                     Text(model.reason.label)
                     Text("· \(model.repo)").font(Theme.Typography.mono)
                     Text("· \(model.date.compactAgo())")
