@@ -46,10 +46,7 @@ extension AppStore {
         reauthStatus = .starting
         // Fresh local actor for the async calls (Sendable) — its host is this account's own
         // web host, so an Enterprise account reconnects against its own instance.
-        let client = DeviceFlowClient(
-            clientID: oauthClientID,
-            webBaseURL: AppConfig.webBaseURL(forAPI: account.apiBaseURL)
-        )
+        let client = makeDeviceFlowClient(oauthClientID, AppConfig.webBaseURL(forAPI: account.apiBaseURL))
         do {
             let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
             reauthStatus = .awaitingAuthorization(code: code.userCode)

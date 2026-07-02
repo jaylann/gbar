@@ -319,25 +319,22 @@ struct AccountsPane: View {
     private func startDeviceFlow() async {
         status = .working("Requesting a device code…")
         deviceCode = nil
-        let host = resolvedAddURL
-        let usedClientID = effectiveClientID
         // Persist the (public) client ID on the store so a later 401 can reconnect this account
         // in place without the user re-entering it. Only a typed override is written — the baked
         // default shouldn't overwrite a previously stored self-host value.
         if !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            store.oauthClientID = usedClientID
+            store.oauthClientID = effectiveClientID
         }
-        let client = DeviceFlowClient(
-            clientID: usedClientID,
-            webBaseURL: AppConfig.webBaseURL(forAPI: host)
-        )
         do {
-            let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
-            deviceCode = code.userCode
-            status = .working("Waiting for you to authorize in the browser…")
-            if let url = URL(string: code.verificationUri) { openURL(url) }
-            let token = try await client.pollForToken(code)
-            try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
+            try await store.addAccountViaDeviceFlow(
+                clientID: effectiveClientID,
+                apiBaseURL: resolvedAddURL,
+                openURL: { openURL($0) },
+                onUserCode: { code in
+                    deviceCode = code
+                    status = .working("Waiting for you to authorize in the browser…")
+                }
+            )
             status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
             resetInputs()
         } catch {
