@@ -42,6 +42,10 @@ let signingSettings: SettingsDictionary = [
     // keychain, no prompt). Requiring the group on an ad-hoc build would fail with
     // "requires a provisioning profile", so it must be swappable per environment.
     "CODE_SIGN_ENTITLEMENTS": "$(GBAR_ENTITLEMENTS)",
+    // Icon Composer (.icon) app icon — gbar/Resources/gbar.icon, compiled by actool.
+    // Must be target-level: Tuist injects a target-level default of "AppIcon" that
+    // outranks any project-`base` value (same precedence issue as CODE_SIGN_IDENTITY).
+    "ASSETCATALOG_COMPILER_APPICON_NAME": "gbar",
 ]
 
 let appInfoPlist: [String: Plist.Value] = [
