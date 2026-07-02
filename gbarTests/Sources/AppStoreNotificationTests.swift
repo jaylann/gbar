@@ -104,6 +104,71 @@ final class AppStoreNotificationTests: XCTestCase {
         XCTAssertTrue(spy.posts.isEmpty, "a months-old item must not banner even when newly in-window")
     }
 
+    /// After a long gap with no successful poll (system sleep, outage, notifications toggled off),
+    /// an item that is genuinely new to us but whose activity predates the gap must still banner —
+    /// the recency gate is skipped because the last poll wasn't recent.
+    func testLongPollingGapBypassesRecencyGate() async throws {
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 1, number: 1)]
+        let store = try makeStore(api: seed)
+        let spy = SpyNotifier()
+        store.notifier = spy
+        await store.refresh() // seed; marks the last successful poll as "now"
+
+        // Simulate the laptop having been asleep well past the recency window.
+        store.lastSectionPollDate = Date(timeIntervalSinceNow: -2 * NotificationDiff.recencyWindow)
+
+        // A PR was opened during the gap — new to us, but its updatedAt is older than the window.
+        var next = FakeGitHubAPI()
+        next.defaultResult = [
+            SearchIssue.stub(id: 1, number: 1),
+            SearchIssue.stub(
+                id: 42,
+                number: 42,
+                updatedAt: Date(timeIntervalSinceNow: -2 * NotificationDiff.recencyWindow)
+            ),
+        ]
+        store.makeAPI = { [next] _, _ in next }
+        await store.refresh()
+
+        XCTAssertEqual(spy.posts.count, 1)
+        XCTAssertTrue(spy.posts[0].body.contains("#42"))
+    }
+
+    /// A stale item suppressed by the recency gate is still folded into the baseline, so it can't
+    /// resurface on a later poll — while a genuinely-new item alongside it still fires.
+    func testSuppressedStaleItemIsRecordedAndDoesNotRefire() async throws {
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 1, number: 1)]
+        let store = try makeStore(api: seed)
+        let spy = SpyNotifier()
+        store.notifier = spy
+        await store.refresh() // seed
+
+        let stale = Date(timeIntervalSinceNow: -270 * 24 * 60 * 60)
+        var second = FakeGitHubAPI()
+        second.defaultResult = [
+            SearchIssue.stub(id: 1, number: 1),
+            SearchIssue.stub(id: 99, number: 99, updatedAt: stale),
+        ]
+        store.makeAPI = { [second] _, _ in second }
+        await store.refresh() // consecutive poll → gate active → #99 suppressed but recorded
+
+        XCTAssertTrue(spy.posts.isEmpty)
+
+        var third = FakeGitHubAPI()
+        third.defaultResult = [
+            SearchIssue.stub(id: 1, number: 1),
+            SearchIssue.stub(id: 99, number: 99, updatedAt: stale),
+            SearchIssue.stub(id: 100, number: 100),
+        ]
+        store.makeAPI = { [third] _, _ in third }
+        await store.refresh()
+
+        XCTAssertEqual(spy.posts.count, 1, "#99 was recorded and must not refire; only fresh #100 banners")
+        XCTAssertTrue(spy.posts[0].body.contains("#100"))
+    }
+
     func testSectionToggleOffSuppressesNotification() async throws {
         var seed = FakeGitHubAPI()
         seed.defaultResult = [SearchIssue.stub(id: 1, number: 1)]

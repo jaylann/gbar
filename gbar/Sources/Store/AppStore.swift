@@ -215,11 +215,15 @@ final class AppStore {
     /// - `lastUnreadInboxKeys`: `"<account.id>\n<notification.id>"` for the previous poll's unread
     ///   threads; `seededInboxAccounts`: account ids whose inbox has been seeded.
     /// - `lastCheckStatus`: last observed terminal CI status per `(account, PR)`.
+    /// - `lastSectionPollDate`: when the last *successful* section poll ran. Gates the section
+    ///   recency filter — after a gap longer than the recency window (sleep/outage/polling off)
+    ///   the filter is skipped so a genuinely-new item isn't dropped just for predating the gap.
     var seenSectionItemKeys: Set<String> = []
     var seededSectionKeys: Set<String> = []
     var lastUnreadInboxKeys: Set<String> = []
     var seededInboxAccounts: Set<Account.ID> = []
     var lastCheckStatus: [PRCheckKey: CIStatus] = [:]
+    var lastSectionPollDate: Date?
 
     /// User-editable menu sections. Seeded from `SearchQuery.defaults` on first launch;
     /// persisted as JSON so custom queries and ordering survive relaunches.

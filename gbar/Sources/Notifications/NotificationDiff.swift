@@ -48,8 +48,10 @@ enum NotificationDiff {
     /// How recently an item must have been active to be worth a "new PR/issue" banner. A backstop
     /// against the fetch window (`/search/issues` is capped and eventually-consistent): even if a
     /// long-dormant item transiently churns into the fetched page and reads as unseen, a banner for
-    /// something last touched beyond this window is never wanted. 24h is generous enough that a
-    /// genuinely-new item created while the app was closed still qualifies on the next launch.
+    /// something last touched beyond this window is never wanted. The caller only applies this gate
+    /// when the previous poll was itself within the window (see `notifyNewSectionItems`), so an item
+    /// that legitimately predates a long polling gap — sleep, outage, notifications off — is still
+    /// bannered on recovery rather than dropped for being old.
     static let recencyWindow: TimeInterval = 24 * 60 * 60
 
     /// Whether an item's last activity (`updatedAt`, falling back to `createdAt`) is within
