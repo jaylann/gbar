@@ -36,10 +36,15 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
+      # persist-credentials: false — checkout v6+ persists GITHUB_TOKEN in a config file
+      # under $RUNNER_TEMP wired in via include.path, which `git config --unset-all` in the
+      # repo can't remove; a `-c` extraheader on top then sends TWO Authorization headers →
+      # "Duplicate header" → HTTP 400 (broke the stage sync in v0.2.2/v0.2.4). So persist
+      # nothing and authenticate each push explicitly with a -c extraheader.
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: false
 
       - name: Read version from Project.swift
         id: version
@@ -70,7 +75,11 @@ jobs:
           git config user.name "gbar release bot"
           git tag -a "${{ steps.version.outputs.tag }}" \
             -m "Release ${{ steps.version.outputs.tag }} (build ${{ steps.version.outputs.build }})"
-          git push origin "${{ steps.version.outputs.tag }}"
+          # checkout runs with persist-credentials: false (see above), so pushes authenticate
+          # explicitly via a -c extraheader.
+          AUTH=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')
+          git -c http."https://github.com/".extraheader="Authorization: Basic ${AUTH}" \
+            push origin "${{ steps.version.outputs.tag }}"
           gh release create "${{ steps.version.outputs.tag }}" \
             --title "${{ steps.version.outputs.tag }}" \
             --target main \
@@ -97,14 +106,10 @@ jobs:
           git checkout stage
           git merge origin/main --no-edit
           # The push must authenticate as the release bot (a ruleset bypass actor) or the stage
-          # ruleset rejects it with GH013 (required checks + PR-only). actions/checkout persists
-          # GITHUB_TOKEN as a URL-scoped http.<host>.extraheader Authorization header; it outranks
-          # a token-in-URL credential, so the push would go out as github-actions[bot] (NOT a
-          # bypass actor). And adding a second extraheader via `-c` while the persisted one is
-          # still set sends BOTH → "Duplicate header: Authorization" → HTTP 400. So: remove the
-          # persisted header first (the tag push above already happened and no longer needs it),
-          # then push with the bot token as the only Authorization header.
-          git config --unset-all http."https://github.com/".extraheader || true
+          # ruleset rejects it with GH013 (required checks + PR-only). checkout persists no
+          # credentials (persist-credentials: false above — its $RUNNER_TEMP-include header
+          # can't be unset from the repo and duplicates any -c header → HTTP 400), so the -c
+          # extraheader below is the ONLY Authorization header and the bot identity applies.
           AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')
           git -c http."https://github.com/".extraheader="Authorization: Basic ${AUTH}" \
             push origin HEAD:stage
