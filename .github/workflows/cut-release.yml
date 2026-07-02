@@ -1,8 +1,10 @@
 name: cut release
 
 # One-click release cut: run from the Actions tab, pick a bump, and it opens the
-# stage → main promotion PR (with version bump + milestone). Merging that PR is the
-# release action — release.yml then tags, builds, signs, notarizes and uploads the DMG.
+# stage → main promotion PR (with version bump + milestone) and enables auto-merge on it.
+# Once the required checks pass the PR merge-commits into main — release.yml then tags,
+# builds, signs, notarizes and uploads the DMG. Promotion PRs merge-commit (not squash) so
+# main keeps stage's history; feature PRs into stage still squash.
 #
 # Everything runs as the lanfermann-release-bot app: a GITHUB_TOKEN-created PR wouldn't
 # trigger CI (GitHub blocks recursive workflow runs), so the required checks on main
@@ -89,3 +91,8 @@ jobs:
             --title "chore(release): v$NEW" \
             --milestone "v$NEW" \
             --body "$(printf 'Promotion PR for **v%s**.\n\nMerging this releases it: release.yml tags `v%s`, builds + signs + notarizes the DMG, uploads it to the GitHub release, updates the Homebrew cask, and syncs `stage` back from `main`.' "$NEW" "$NEW")"
+          # Auto-merge as a MERGE COMMIT (never squash) once the required checks go green, so
+          # `main` shares `stage`'s history instead of diverging into squash snapshots. The
+          # back-sync in release.yml then keeps `main` an ancestor of `stage`. Requires the
+          # repo's "Allow merge commits" + "Allow auto-merge" settings to be on.
+          gh pr merge "release/v$NEW" --repo "${{ github.repository }}" --auto --merge

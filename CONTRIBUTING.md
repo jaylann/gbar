@@ -24,8 +24,9 @@ just test        # run the test suite
 - Branch off **`stage`**; open PRs against `stage`. `main` is release-only.
 - Name branches `<type>/<slug>` matching the commit type, e.g. `feat/inbox-filters`,
   `fix/menu-flicker`.
-- PRs are **squash-merged**, so the **PR title must be a Conventional Commit**
-  (`type(scope): subject`, lowercase subject).
+- Feature/fix PRs into `stage` are **squash-merged**, so the **PR title must be a
+  Conventional Commit** (`type(scope): subject`, lowercase subject). The `stage` → `main`
+  promotion PR is the exception — it's **merge-committed**, never squashed (see Releases).
 
 ## Commit conventions
 
@@ -43,6 +44,9 @@ docs refactor test perf style ci build revert`. Breaking changes use `!`
 ## Releases
 
 Run the **cut release** action (Actions tab → pick a bump) — it bumps `Project.swift`,
-creates the milestone, and opens the `stage` → `main` promotion PR. Merging that PR is the
-release: `release.yml` tags `vX.Y.Z`, builds the signed + notarized DMG, uploads it to the
-GitHub release, and updates the Homebrew cask.
+creates the milestone, opens the `stage` → `main` promotion PR, and enables auto-merge on
+it. Once the required checks pass the PR **merge-commits** into `main` (never squash, so
+`main` keeps `stage`'s history) and that's the release: `release.yml` tags `vX.Y.Z`, builds
+the signed + notarized DMG, uploads it to the GitHub release, updates the Homebrew cask, and
+back-merges `main` into `stage`. If you ever merge a promotion PR by hand, pick **Create a
+merge commit** — squashing it re-diverges the branches.
