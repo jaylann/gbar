@@ -40,10 +40,14 @@ struct HoverRow<Accessory: View, Content: View>: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
             if hasAccessory, accessoryVisible {
                 trailingAccessory()
-                    .padding(.leading, Theme.Spacing.sm)
-                    // Slide in from the trailing edge as the content makes room, so the reveal
-                    // reads as one morph rather than a panel dropped on top of the text.
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                    // Cap the accessory's *layout* height to the row's content area so revealing
+                    // 28pt icon buttons never grows a compact row (they overflow the cap by a
+                    // couple of invisible points instead of pushing the list down).
+                        .frame(maxHeight: density.rowHeight - density.rowVerticalPadding * 2)
+                        .padding(.leading, Theme.Spacing.sm)
+                        // Slide in from the trailing edge as the content makes room, so the reveal
+                        // reads as one morph rather than a panel dropped on top of the text.
+                        .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
         .padding(.horizontal, Theme.Spacing.md)

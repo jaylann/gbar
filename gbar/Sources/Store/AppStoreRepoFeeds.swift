@@ -38,9 +38,14 @@ extension AppStore {
 
     // MARK: Watchlist mutators
 
-    /// Append a blank watchlist slot for the user to fill in with an `owner/name`.
-    func addWatchRepo() {
-        watchlist.append("")
+    /// Validate + append an `owner/name` entry. Returns false (and leaves the list untouched)
+    /// for malformed input or a case-insensitive duplicate, so the pane can show inline feedback.
+    @discardableResult
+    func addWatchRepo(_ raw: String) -> Bool {
+        guard let slug = Self.normalizedSlug(raw) else { return false }
+        guard !watchlist.contains(where: { $0.caseInsensitiveCompare(slug) == .orderedSame }) else { return false }
+        watchlist.append(slug)
+        return true
     }
 
     func deleteWatchRepo(at offsets: IndexSet) {

@@ -1,12 +1,31 @@
 import SwiftUI
 
 /// The Watchlist settings pane: the curated set of `owner/name` repos whose GitHub Actions runs
-/// and releases feed the menu's Actions and Releases tabs. Each repo is a small card — edit the
-/// slug, reorder, or delete it. Every edit writes straight back into `store.watchlist`, whose
-/// `didSet` persists it. Deliberately the *only* scope for those tabs (not the starred set), so
-/// the per-repo request fan-out stays bounded.
+/// and releases feed the menu's Actions and Releases tabs. Repos are added through a single
+/// validated input up top (invalid or duplicate slugs get inline feedback, never appended);
+/// existing entries render as read-only rows with hover-revealed reorder/delete controls.
+/// Deliberately the *only* scope for those tabs (not the starred set), so the per-repo request
+/// fan-out stays bounded.
 struct WatchlistPane: View {
     @Bindable var store: AppStore
+
+    @State private var newRepo = ""
+    /// Inline feedback for the add field — set on an invalid/duplicate submit, cleared on edit.
+    @State private var addHint: String?
+    @FocusState private var addFieldFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Watchlist entries with a stable identity for animated moves. Slugs are usually unique
+    /// (the add path de-dupes), but legacy data may repeat — an occurrence suffix keeps the
+    /// `ForEach` ids distinct either way.
+    private var keyedEntries: [(key: String, index: Int, entry: String)] {
+        var counts: [String: Int] = [:]
+        return store.watchlist.enumerated().map { index, entry in
+            let occurrence = counts[entry, default: 0]
+            counts[entry] = occurrence + 1
+            return ("\(entry)#\(occurrence)", index, entry)
+        }
+    }
 
     var body: some View {
         ScrollView {
@@ -15,64 +34,108 @@ struct WatchlistPane: View {
                     title: "Watched repos",
                     count: store.watchlist.isEmpty ? nil : store.watchlist.count
                 )
-                Text("Each repo (owner/name) feeds the Actions and Releases tabs. Blank entries are skipped.")
+                Text("gbar follows each repo's Actions runs and releases — they fill the Actions and Releases tabs.")
                     .font(Theme.Typography.caption)
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, Theme.Spacing.md)
+
+                addRow
+                    .padding(.horizontal, Theme.Spacing.md)
+                    .padding(.top, Theme.Spacing.xs)
 
                 if store.watchlist.isEmpty {
                     EmptyStateView(
                         intent: .neutral,
                         title: "No watched repos",
-                        message: "Add a repo to follow its Actions runs and releases."
+                        message: "Add a repo above to follow its Actions runs and releases."
                     )
                 } else {
-                    ForEach(Array(store.watchlist.enumerated()), id: \.offset) { index, _ in
-                        repoCard(index: index)
+                    let entries = keyedEntries
+                    VStack(spacing: 2) {
+                        ForEach(entries, id: \.key) { item in
+                            repoRow(index: item.index, entry: item.entry)
+                        }
                     }
                     .padding(.horizontal, Theme.Spacing.md)
+                    // Rows are identity-keyed, so reorders/deletes glide instead of snapping.
+                    .animation(Motion.respecting(reduceMotion, Motion.spring), value: entries.map(\.key))
                 }
-
-                Button {
-                    store.addWatchRepo()
-                } label: {
-                    Label("Add repo", systemImage: "plus.circle")
-                }
-                .buttonStyle(GBButtonStyle(variant: .ghost))
-                .padding(.horizontal, Theme.Spacing.md)
-                .padding(.top, Theme.Spacing.xs)
             }
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, Theme.Spacing.md)
         }
     }
 
-    private func repoCard(index: Int) -> some View {
-        let entry = $store.watchlist[index]
-        let count = store.watchlist.count
-        let isValid = AppStore.normalizedSlug(entry.wrappedValue) != nil
-        return HStack(spacing: Theme.Spacing.sm) {
-            Image(systemName: "shippingbox")
-                .font(Theme.Typography.caption)
-                .foregroundStyle(.secondary)
-            TextField("owner/name", text: entry)
-                .textFieldStyle(.plain)
-                .font(Theme.Typography.mono)
-            if !isValid {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(Theme.Typography.caption)
-                    .foregroundStyle(Theme.Palette.pending)
-                    .gbTooltip("Enter a repo as owner/name.")
-                    .accessibilityLabel("Invalid repo")
+    // MARK: Add
+
+    private var addRow: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            HStack(spacing: Theme.Spacing.sm) {
+                TextField("owner/name", text: $newRepo)
+                    .modifier(SettingsFieldStyle())
+                    .font(Theme.Typography.mono)
+                    .focused($addFieldFocused)
+                    .onSubmit(addRepo)
+                    .onChange(of: newRepo) { addHint = nil }
+                Button("Add", action: addRepo)
+                    .buttonStyle(GBButtonStyle(variant: .secondary))
+                    .disabled(newRepo.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Spacer(minLength: Theme.Spacing.sm)
-            reorderControls(index: index, count: count)
+            if let addHint {
+                ValidationHint(message: addHint)
+            }
         }
-        .padding(Theme.Spacing.sm)
-        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.md, style: .continuous))
     }
 
-    private func reorderControls(index: Int, count: Int) -> some View {
+    private func addRepo() {
+        let input = newRepo.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !input.isEmpty else { return }
+        guard let slug = AppStore.normalizedSlug(input) else {
+            addHint = "Enter a repo as owner/name."
+            return
+        }
+        guard store.addWatchRepo(slug) else {
+            addHint = "Already watching \(slug)."
+            return
+        }
+        newRepo = ""
+        addHint = nil
+        // Keep focus so several repos can be added back to back.
+        addFieldFocused = true
+    }
+
+    // MARK: Rows
+
+    private func repoRow(index: Int, entry: String) -> some View {
+        let count = store.watchlist.count
+        let isValid = AppStore.normalizedSlug(entry) != nil
+        return HoverRow(trailingAccessory: {
+            rowControls(index: index, count: count)
+        }, content: {
+            HStack(spacing: Theme.Spacing.sm) {
+                Image(systemName: "shippingbox")
+                    .font(Theme.Typography.caption)
+                    .foregroundStyle(.secondary)
+                Text(entry.isEmpty ? "(blank)" : entry)
+                    .font(Theme.Typography.mono)
+                    .foregroundStyle(isValid ? .primary : .secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                // Legacy persisted entries can predate the validated add field — keep them
+                // flagged (and deletable) rather than silently skipped.
+                if !isValid {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(Theme.Typography.caption)
+                        .foregroundStyle(Theme.Palette.pending)
+                        .gbTooltip("Not a valid owner/name — this entry is skipped.")
+                        .accessibilityLabel("Invalid repo")
+                }
+                Spacer(minLength: 0)
+            }
+        })
+    }
+
+    private func rowControls(index: Int, count: Int) -> some View {
         HStack(spacing: 2) {
             Button {
                 store.moveWatchRepo(from: IndexSet(integer: index), to: index - 1)
