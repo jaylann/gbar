@@ -18,14 +18,16 @@ See the paid build in the [README](../README.md).)
 3. **Enable device flow:** on the app's page, check **"Enable Device Flow"** and save.
    This is the important step — device flow is off by default.
 4. Copy the **Client ID** (it's public; there's no secret to manage for device flow).
-5. In gbar: **Settings → Account → Sign in with GitHub**, paste the **Client ID**, and
-   follow the prompt (gbar shows a code; you enter it at <https://github.com/login/device>).
+5. In gbar: **Settings → Accounts**, open the **Advanced** disclosure and paste the
+   **Client ID** (on a self-host build the disclosure opens automatically), then hit
+   **Sign in with GitHub** and follow the prompt (gbar shows a code; you enter it at
+   <https://github.com/login/device>).
 
 ### GitHub Enterprise
 
-In **Settings → Advanced**, set the **API base URL** to your Enterprise host's API, e.g.
-`https://ghe.example.com/api/v3`. Register the OAuth App on your Enterprise instance and
-use its client ID.
+In **Settings → Accounts → Advanced**, set the **API base URL** to your Enterprise
+host's API, e.g. `https://ghe.example.com/api/v3`. Register the OAuth App on your
+Enterprise instance and use its client ID.
 
 ## Option B — personal access token
 
@@ -33,7 +35,7 @@ If you'd rather not register an OAuth App:
 
 1. Create a token at <https://github.com/settings/tokens> with the **`repo`** scope
    (and **`notifications`** if you want the notifications features).
-2. In gbar: **Settings → Account → Use a token instead**, and paste it.
+2. In gbar: **Settings → Accounts**, pick **Access token**, and paste it.
 
 Tokens and OAuth credentials are stored in the **macOS Keychain**, never in plaintext
 on disk.

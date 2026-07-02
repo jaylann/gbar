@@ -51,7 +51,7 @@ extension AppStore {
     /// per-action failure; anything else surfaces the caller's `fallback` message.
     func handleActionError(_ error: Error, verb: String, fallback: String, item: AccountItem) {
         if case .http(401) = error as? GitHubClient.ClientError {
-            sessionExpired = true
+            markSessionExpired(accountID: item.account.id)
             lastErrorMessage = "Session expired — reconnect in Settings."
         } else {
             lastErrorMessage = fallback

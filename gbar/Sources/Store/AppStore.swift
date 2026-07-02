@@ -79,7 +79,7 @@ final class AppStore {
     /// GitHub API base — the default host for new github.com accounts and the base used to
     /// migrate a legacy token. Per-account hosts live on `Account.apiBaseURL`.
     var apiBaseURL: URL {
-        didSet { UserDefaults.standard.set(apiBaseURL.absoluteString, forKey: Self.apiBaseURLKey) }
+        didSet { defaults.set(apiBaseURL.absoluteString, forKey: Self.apiBaseURLKey) }
     }
 
     static let apiBaseURLKey = "gbar.apiBaseURL"
@@ -89,7 +89,7 @@ final class AppStore {
     /// "Reconnect" re-run the device flow in place without the user re-entering it. Defaults to
     /// the build's baked client ID (blank on self-host builds until the user supplies one).
     var oauthClientID: String {
-        didSet { UserDefaults.standard.set(oauthClientID, forKey: Self.oauthClientIDKey) }
+        didSet { defaults.set(oauthClientID, forKey: Self.oauthClientIDKey) }
     }
 
     static let oauthClientIDKey = "gbar.oauthClientID"
@@ -98,9 +98,9 @@ final class AppStore {
     var accountFilter: Account.ID? {
         didSet {
             if let accountFilter {
-                UserDefaults.standard.set(accountFilter, forKey: Self.accountFilterKey)
+                defaults.set(accountFilter, forKey: Self.accountFilterKey)
             } else {
-                UserDefaults.standard.removeObject(forKey: Self.accountFilterKey)
+                defaults.removeObject(forKey: Self.accountFilterKey)
             }
         }
     }
@@ -112,7 +112,7 @@ final class AppStore {
     /// the poll loop at the new interval. Persisted like `apiBaseURL`.
     var pollInterval: TimeInterval {
         didSet {
-            UserDefaults.standard.set(pollInterval, forKey: Self.pollIntervalKey)
+            defaults.set(pollInterval, forKey: Self.pollIntervalKey)
             startPolling()
         }
     }
@@ -141,10 +141,21 @@ final class AppStore {
     /// the PR list (two requests each), so cap it to stay friendly to GitHub's rate limit.
     static let checksConcurrency = 5
 
+    /// Persistence backend for all non-secret state (the `didSet` writes above/below).
+    /// `.standard` in the app; the test init substitutes an isolated, wiped suite so store
+    /// mutations in tests can never leak into the real `dev.lanfermann.gbar` domain.
+    let defaults: UserDefaults
+
     /// Builds the API client used by `refresh()`. Overridable so tests can inject a fake
     /// `GitHubAPI` without touching the network; defaults to the live `GitHubClient`.
     @ObservationIgnored
     var makeAPI: @Sendable (_ baseURL: URL, _ token: String) -> GitHubAPI = { GitHubClient(baseURL: $0, token: $1) }
+
+    /// Builds the device-flow actor used by add-account and reconnect. Overridable so tests
+    /// can hand back a client wired to a mocked `URLSession`; defaults to the live client.
+    @ObservationIgnored
+    var makeDeviceFlowClient: @Sendable (_ clientID: String, _ webBaseURL: URL) -> DeviceFlowClient =
+        { DeviceFlowClient(clientID: $0, webBaseURL: $1) }
 
     /// Reads an account's token. Injectable so tests avoid the Keychain; defaults to the
     /// per-account Keychain key.
@@ -173,19 +184,19 @@ final class AppStore {
     /// Master switch for desktop notifications, plus per-category toggles. All default on;
     /// persisted like `apiBaseURL`. Inline defaults let the test-only init skip them.
     var notificationsEnabled = true {
-        didSet { UserDefaults.standard.set(notificationsEnabled, forKey: Self.notificationsEnabledKey) }
+        didSet { defaults.set(notificationsEnabled, forKey: Self.notificationsEnabledKey) }
     }
 
     var notifyInbox = true {
-        didSet { UserDefaults.standard.set(notifyInbox, forKey: Self.notifyInboxKey) }
+        didSet { defaults.set(notifyInbox, forKey: Self.notifyInboxKey) }
     }
 
     var notifySections = true {
-        didSet { UserDefaults.standard.set(notifySections, forKey: Self.notifySectionsKey) }
+        didSet { defaults.set(notifySections, forKey: Self.notifySectionsKey) }
     }
 
     var notifyChecks = true {
-        didSet { UserDefaults.standard.set(notifyChecks, forKey: Self.notifyChecksKey) }
+        didSet { defaults.set(notifyChecks, forKey: Self.notifyChecksKey) }
     }
 
     static let notificationsEnabledKey = "gbar.notificationsEnabled"
@@ -214,8 +225,11 @@ final class AppStore {
     /// persisted as JSON so custom queries and ordering survive relaunches.
     var savedQueries: [SearchQuery.Section] {
         didSet {
-            if let data = try? JSONEncoder().encode(savedQueries) {
-                UserDefaults.standard.set(data, forKey: Self.savedQueriesKey)
+            do {
+                let data = try JSONEncoder().encode(savedQueries)
+                defaults.set(data, forKey: Self.savedQueriesKey)
+            } catch {
+                Log.store.error("saved queries encode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -228,8 +242,11 @@ final class AppStore {
     /// stays bounded and predictable. Persisted as JSON like `savedQueries`.
     var watchlist: [String] {
         didSet {
-            if let data = try? JSONEncoder().encode(watchlist) {
-                UserDefaults.standard.set(data, forKey: Self.watchlistKey)
+            do {
+                let data = try JSONEncoder().encode(watchlist)
+                defaults.set(data, forKey: Self.watchlistKey)
+            } catch {
+                Log.store.error("watchlist encode failed: \(error.localizedDescription, privacy: .public)")
             }
         }
     }
@@ -240,92 +257,20 @@ final class AppStore {
         !accounts.isEmpty || pendingLegacyToken != nil
     }
 
-    // MARK: View-facing (account-filtered) projections
-
-    /// Apply the active account filter to a set of tagged items. `nil` filter = pass-through.
-    func visible(_ items: [AccountItem]) -> [AccountItem] {
-        guard let filter = accountFilter else { return items }
-        return items.filter { $0.account.id == filter }
-    }
-
-    /// Notifications scoped to the active account filter.
-    var visibleNotifications: [AccountNotification] {
-        guard let filter = accountFilter else { return notifications }
-        return notifications.filter { $0.account.id == filter }
-    }
-
-    /// Count of actionable PRs — review-requested plus assigned — shown on the menu-bar icon.
-    /// Intentionally global (ignores the in-menu account filter): the icon reflects app-wide
-    /// state, not a transient view scope.
-    var badgeCount: Int {
-        let actionable: Set = ["review-requested", "assigned-prs"]
-        return sections.filter { actionable.contains($0.id) }.reduce(0) { $0 + $1.items.count }
-    }
-
-    /// Loaded sections routed to the PRs tab, account-filtered.
-    var prSections: [LoadedSection] {
-        filteredSections(kind: .prs)
-    }
-
-    /// Loaded sections routed to the Issues tab, account-filtered.
-    var issueSections: [LoadedSection] {
-        filteredSections(kind: .issues)
-    }
-
-    private func filteredSections(kind: SearchQuery.Section.Kind) -> [LoadedSection] {
-        sections
-            .filter { $0.kind == kind }
-            .map { LoadedSection(id: $0.id, title: $0.title, items: visible($0.items), kind: $0.kind) }
-    }
-
-    /// Total PR-section items (filtered) — the count shown on the PRs tab.
-    var prCount: Int {
-        prSections.reduce(0) { $0 + $1.items.count }
-    }
-
-    /// Total issue-section items (filtered) — the count shown on the Issues tab.
-    var issueCount: Int {
-        issueSections.reduce(0) { $0 + $1.items.count }
-    }
-
-    /// Unread notifications (filtered) — the count shown on the Notifications tab.
-    var unreadNotificationCount: Int {
-        visibleNotifications.filter(\.notification.unread).count
-    }
-
-    /// Whether the repo an item sits on is starred by that item's account (case-insensitive).
-    func isStarred(_ item: AccountItem) -> Bool {
-        starredByAccount[item.account.id]?.contains(item.issue.repositorySlug.lowercased()) ?? false
-    }
-
-    /// Whether the repo a notification belongs to is starred by its account (case-insensitive).
-    func isStarred(_ item: AccountNotification) -> Bool {
-        starredByAccount[item.account.id]?.contains(item.notification.repository.fullName.lowercased()) ?? false
-    }
-
-    /// The hydrated CI status/detail for a tagged PR item, if any.
-    func checks(for item: AccountItem) -> PRChecks? {
-        prChecks[PRCheckKey(accountID: item.account.id, prID: item.issue.id)]
-    }
-
-    /// The hydrated action gate for a tagged PR item, if any (`nil` = not yet hydrated).
-    func gate(for item: AccountItem) -> PRGate? {
-        prGates[PRCheckKey(accountID: item.account.id, prID: item.issue.id)]
-    }
-
     init() {
-        if let stored = UserDefaults.standard.string(forKey: Self.apiBaseURLKey), let url = URL(string: stored) {
+        defaults = .standard
+        if let stored = defaults.string(forKey: Self.apiBaseURLKey), let url = URL(string: stored) {
             apiBaseURL = url
         } else {
             apiBaseURL = AppConfig.defaultAPIBaseURL
         }
         // Restore the last-used OAuth client ID, falling back to the build's baked one (blank on
         // self-host builds). Public identifier, so UserDefaults is fine.
-        oauthClientID = UserDefaults.standard.string(forKey: Self.oauthClientIDKey) ?? AppConfig.bakedClientID ?? ""
+        oauthClientID = defaults.string(forKey: Self.oauthClientIDKey) ?? AppConfig.bakedClientID ?? ""
         // Validate the restored value against the known intervals so a corrupt/legacy default
         // (e.g. a tiny 0.001 that would spin the loop hot) can't reach the poll loop.
-        if UserDefaults.standard.object(forKey: Self.pollIntervalKey) != nil,
-           let stored = PollInterval(rawValue: UserDefaults.standard.double(forKey: Self.pollIntervalKey))
+        if defaults.object(forKey: Self.pollIntervalKey) != nil,
+           let stored = PollInterval(rawValue: defaults.double(forKey: Self.pollIntervalKey))
         {
             pollInterval = stored.rawValue
         } else {
@@ -333,7 +278,7 @@ final class AppStore {
         }
         // Key absent → first launch, seed defaults. Key present (even if `[]`) → the user
         // may have intentionally cleared the list, so respect it and don't resurrect defaults.
-        if let data = UserDefaults.standard.data(forKey: Self.savedQueriesKey) {
+        if let data = defaults.data(forKey: Self.savedQueriesKey) {
             do {
                 savedQueries = try JSONDecoder().decode([SearchQuery.Section].self, from: data)
             } catch {
@@ -344,15 +289,17 @@ final class AppStore {
             savedQueries = SearchQuery.defaults
         }
         // Watchlist starts empty — the Actions/Releases tabs prompt the user to add repos.
-        if let data = UserDefaults.standard.data(forKey: Self.watchlistKey),
-           let decoded = try? JSONDecoder().decode([String].self, from: data)
-        {
-            watchlist = decoded
+        if let data = defaults.data(forKey: Self.watchlistKey) {
+            do {
+                watchlist = try JSONDecoder().decode([String].self, from: data)
+            } catch {
+                Log.store.error("watchlist decode failed: \(error.localizedDescription, privacy: .public)")
+                watchlist = []
+            }
         } else {
             watchlist = []
         }
         // Notification toggles default on; absence of the key means first launch.
-        let defaults = UserDefaults.standard
         notificationsEnabled = defaults.object(forKey: Self.notificationsEnabledKey) as? Bool ?? true
         notifyInbox = defaults.object(forKey: Self.notifyInboxKey) as? Bool ?? true
         notifySections = defaults.object(forKey: Self.notifySectionsKey) as? Bool ?? true
@@ -365,12 +312,14 @@ final class AppStore {
     /// filter (dropped if it no longer names a live account), and stage any legacy single-token
     /// credential for migration on the next refresh.
     private func restorePersistedAccounts() {
-        if let data = UserDefaults.standard.data(forKey: Self.accountsKey),
-           let decoded = try? JSONDecoder().decode([Account].self, from: data)
-        {
-            accounts = decoded
+        if let data = defaults.data(forKey: Self.accountsKey) {
+            do {
+                accounts = try JSONDecoder().decode([Account].self, from: data)
+            } catch {
+                Log.store.error("accounts decode failed: \(error.localizedDescription, privacy: .public)")
+            }
         }
-        if let filter = UserDefaults.standard.string(forKey: Self.accountFilterKey),
+        if let filter = defaults.string(forKey: Self.accountFilterKey),
            accounts.contains(where: { $0.id == filter })
         {
             accountFilter = filter
@@ -384,13 +333,19 @@ final class AppStore {
 
     #if DEBUG
     /// Test-only initializer: fixed base URL, already-connected accounts, an injectable API
-    /// factory, and a constant token per account — no Keychain/UserDefaults reads.
+    /// factory, and a constant token per account. Persistence goes to an isolated, wiped
+    /// defaults suite — never the real app domain (a suite of `AppStore` tests once overwrote
+    /// the live account list and client ID through the `didSet` writes).
     init(
         apiBaseURL: URL,
         accounts: [Account],
         makeAPI: @escaping @Sendable (URL, String) -> GitHubAPI,
         token: String = "test-token"
     ) {
+        let suiteName = "dev.lanfermann.gbar.tests"
+        let suite = UserDefaults(suiteName: suiteName) ?? .standard
+        suite.removePersistentDomain(forName: suiteName)
+        defaults = suite
         self.apiBaseURL = apiBaseURL
         oauthClientID = ""
         pollInterval = PollInterval.off.rawValue
@@ -478,7 +433,11 @@ extension AppStore {
         guard !accounts.isEmpty else { return }
         isRefreshing = true
         lastErrorMessage = nil
+        // Clear both halves of the expired-session state together — leaving `expiredAccountID`
+        // behind would let `expiredAccount` resolve a stale account mid-refresh, before
+        // `applyErrorState` recomputes the pair.
         sessionExpired = false
+        expiredAccountID = nil
         defer { isRefreshing = false }
 
         // One API client per account (skipping any whose token has gone missing), reused for
@@ -574,6 +533,14 @@ extension AppStore {
         } else {
             lastErrorMessage = loads.values.compactMap(\.errorMessage).first
         }
+    }
+
+    /// Flag one account's session as expired — used by quick actions on a 401 so the reconnect
+    /// prompt can offer a per-account "Reconnect <login>", matching the refresh path. Lives here
+    /// because `expiredAccountID` has a `private(set)` setter scoped to this file.
+    func markSessionExpired(accountID: Account.ID) {
+        sessionExpired = true
+        expiredAccountID = accountID
     }
 
     /// Mark a notification thread read on the server (using its own account's token), then
@@ -727,8 +694,11 @@ extension AppStore {
     }
 
     private func persistAccounts() {
-        if let data = try? JSONEncoder().encode(accounts) {
-            UserDefaults.standard.set(data, forKey: Self.accountsKey)
+        do {
+            let data = try JSONEncoder().encode(accounts)
+            defaults.set(data, forKey: Self.accountsKey)
+        } catch {
+            Log.store.error("accounts encode failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 

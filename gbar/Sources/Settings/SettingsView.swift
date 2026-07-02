@@ -1,10 +1,11 @@
 import SwiftUI
 
 /// Settings, rebuilt on the app's own design system instead of a native grouped `Form`: a
-/// compact header with the popover's `InlineTabBar` switching between three focused panes —
+/// compact header with the popover's `InlineTabBar` switching between four focused panes —
 /// **Accounts** (add via device flow or PAT, per-account Enterprise host, remove one or all),
-/// **Queries** (edit the menu's saved-search sections), and **General** (background refresh
-/// cadence, notification preferences, build info). See docs/PRODUCT.md.
+/// **Queries** (edit the menu's saved-search sections), **Watchlist** (the repos the
+/// Actions/Releases tabs cover), and **General** (background refresh cadence, notification
+/// preferences, build info). See docs/PRODUCT.md.
 ///
 /// Hosted in a `.hiddenTitleBar` `Window` (not a `Settings` scene) so `Surface.canvas` fills the
 /// whole window as one seamless surface — the traffic lights float in the `titlebarInset` strip.
@@ -27,7 +28,7 @@ struct SettingsView: View {
             pane
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        .frame(width: 500, height: 560)
+        .frame(width: Theme.Layout.settingsWidth, height: Theme.Layout.settingsHeight)
         .background(Surface.canvas)
         // Owns the whole agent-app activation lifecycle for this window: promote to a
         // regular app + make the window key+main so its text fields accept clicks and
