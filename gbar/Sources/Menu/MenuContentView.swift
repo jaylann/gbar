@@ -238,21 +238,24 @@ struct MenuContentView: View {
 
     // MARK: Per-tab content
 
-    /// Non-private so `animatedTabContent` (MenuAnimations.swift) can wrap it in the tab transition.
+    /// The body for a specific tab. Parameterized by `tab` (not `selectedTab`) so
+    /// `animatedTabContent` can keep every visited tab's body alive in a pager and slide between
+    /// them — rather than rebuilding the whole eager list on each switch (the navigation hitch on a
+    /// busy PR tab). Non-private so `animatedTabContent` (MenuAnimations.swift) can reach it.
     @ViewBuilder
-    var tabContent: some View {
+    func tabContent(for tab: MenuTab) -> some View {
         // The Actions/Releases tabs load on their own (repo-feeds) wave — keep their skeleton up
         // until that wave finishes, independent of the section/inbox first load.
-        let repoFeedTab = selectedTab == .actions || selectedTab == .releases
+        let repoFeedTab = tab == .actions || tab == .releases
         if !store.hasLoaded || (repoFeedTab && !store.hasLoadedRepoFeeds) {
             // Fill the taller body from the top so the skeleton reads like the list it stands
             // in for, rather than a short block floating mid-popover.
-            LoadingView(rows: 8, reservesDisclosureGutter: selectedTab == .prs)
+            LoadingView(rows: 8, reservesDisclosureGutter: tab == .prs)
                 .padding(.horizontal, Theme.Spacing.sm)
                 .padding(.vertical, Theme.Spacing.xs)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
-            switch selectedTab {
+            switch tab {
             case .prs: prList
             case .issues: issueList
             case .notifications: notificationList
@@ -286,13 +289,12 @@ struct MenuContentView: View {
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No pull requests", caughtUpMessage: "Nothing needs you right now.")
         } content: {
+            // Flat (not `Section`) so `LazyVStack` estimates cleanly — see the container comment
+            // in `tabScaffold`. The header and its rows are plain lazy children of one `ForEach`.
             ForEach(groups, id: \.section.id) { group in
-                Section {
-                    ForEach(group.items) { item in
-                        row(item)
-                    }
-                } header: {
-                    SectionHeader(title: group.section.title, count: group.items.count)
+                SectionHeader(title: group.section.title, count: group.items.count)
+                ForEach(group.items) { item in
+                    row(item)
                 }
             }
         }
@@ -305,13 +307,12 @@ struct MenuContentView: View {
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No issues", caughtUpMessage: "No issues assigned to you.")
         } content: {
+            // Flat (not `Section`) so `LazyVStack` estimates cleanly — see the container comment
+            // in `tabScaffold`. The header and its rows are plain lazy children of one `ForEach`.
             ForEach(groups, id: \.section.id) { group in
-                Section {
-                    ForEach(group.items) { item in
-                        row(item)
-                    }
-                } header: {
-                    SectionHeader(title: group.section.title, count: group.items.count)
+                SectionHeader(title: group.section.title, count: group.items.count)
+                ForEach(group.items) { item in
+                    row(item)
                 }
             }
         }
@@ -349,16 +350,13 @@ struct MenuContentView: View {
                     errorBanner(message)
                 }
                 ScrollView {
-                    // Eager (not `LazyVStack`): the rows are variable-height (an expanded PR adds
-                    // its `CheckRow` detail; per-row CI hydration toggles the disclosure gutter),
-                    // and a `LazyVStack` over-reserves space for such rows on macOS — leaving empty
-                    // gaps that appear/disappear as scrolling forces re-measurement. Eager layout
-                    // measures every row exactly, so the geometry is always right, and since rows
-                    // are never recycled mid-scroll, scrolling stays allocation-free (no per-frame
-                    // row realization or avatar re-decode). The lists are bounded (a height-capped,
-                    // intermittently-opened popover), so realizing them up front is cheap. Kept
-                    // deliberately free of any ambient `.animation`/row `.transition`: a filter
-                    // toggle animates the diff via `withAnimation` at the chip (see MenuFilters).
+                    // Eager (not `LazyVStack`): the rows are variable-height, and `LazyVStack`
+                    // estimates offscreen row heights too tall on macOS — over-reserving space, so
+                    // empty gaps appear and disappear as scrolling forces re-measurement. Laying the
+                    // list out eagerly measures every row exactly (no estimation), so the geometry is
+                    // always right, and scrolling stays allocation-free (no row recycling). Kept
+                    // deliberately free of any ambient `.animation`/row `.transition`: a filter toggle
+                    // animates the diff via `withAnimation` at the chip (see MenuFilters).
                     VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                         content()
                     }
