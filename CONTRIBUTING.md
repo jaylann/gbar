@@ -42,5 +42,7 @@ docs refactor test perf style ci build revert`. Breaking changes use `!`
 
 ## Releases
 
-Merge `stage` → `main` via a promotion PR; `release.yml` reads `marketingVersion` from
-`Project.swift`, tags `vX.Y.Z`, and cuts the GitHub release.
+Run the **cut release** action (Actions tab → pick a bump) — it bumps `Project.swift`,
+creates the milestone, and opens the `stage` → `main` promotion PR. Merging that PR is the
+release: `release.yml` tags `vX.Y.Z`, builds the signed + notarized DMG, uploads it to the
+GitHub release, and updates the Homebrew cask.
