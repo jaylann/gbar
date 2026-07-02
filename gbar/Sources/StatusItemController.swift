@@ -17,8 +17,9 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
 
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
-    /// When the transient popover last auto-closed, used to swallow the reopen race (see below).
-    private var lastPopoverClose: Date?
+    /// Outside-click / app-resign monitors, live only while the popover is shown. Installed in
+    /// `showPopover`, torn down in `popoverDidClose` (so every close path cleans up exactly once).
+    private var eventMonitors: [Any] = []
 
     private static let symbolName = "chevron.left.forwardslash.chevron.right"
 
@@ -34,7 +35,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
         )
         // Let the SwiftUI content drive the popover size (mirrors the old MenuBarExtra window).
         content.sizingOptions = .preferredContentSize
-        popover.behavior = .transient
+        // `.applicationDefined` (not `.transient`): AppKit does no automatic closing, so the
+        // dismiss-click on the status button no longer auto-closes on mouse-DOWN and then races
+        // the mouse-UP reopen. We drive open/close deterministically and reimplement outside-click
+        // dismissal with our own event monitors (see `installEventMonitors`).
+        popover.behavior = .applicationDefined
         popover.delegate = self
         popover.contentViewController = content
 
@@ -101,25 +106,89 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
     private func togglePopover() {
         guard let button = statusItem?.button else { return }
         if popover.isShown {
-            popover.performClose(nil)
-            return
+            closePopover()
+        } else {
+            showPopover(from: button)
         }
-        // The transient popover closes on the mouse-DOWN that precedes this action's mouse-UP, so
-        // a click meant to dismiss it would otherwise immediately reopen it. Swallow a reopen that
-        // lands right after that auto-close.
-        if let closed = lastPopoverClose, Date().timeIntervalSince(closed) < 0.25 {
-            lastPopoverClose = nil
-            return
-        }
-        // Agent apps aren't active by default; activate so the popover's text fields (search)
-        // can take keyboard focus.
-        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showPopover(from button: NSStatusBarButton) {
+        // Show BEFORE activating. `show` anchors to the status button's window, which lives on the
+        // display the user just clicked. Activating first can promote another window (e.g. Settings
+        // on a second display) to main and drag placement to that display; making the popover key
+        // first pins it, so the later `activate` can't move it. Activation is still needed so the
+        // popover's SwiftUI search field can take keyboard focus in this LSUIElement agent app.
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-        popover.contentViewController?.view.window?.makeKey()
+        popover.contentViewController?.view.window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        installEventMonitors()
+    }
+
+    private func closePopover() {
+        guard popover.isShown else { return }
+        popover.performClose(nil) // monitors torn down in `popoverDidClose`
+    }
+
+    // MARK: Outside-click dismissal
+
+    /// `.applicationDefined` gives no automatic dismissal, so reimplement it: a global monitor for
+    /// clicks in other apps, a local monitor for clicks on our own other windows (Settings), and an
+    /// app-resign observer for Cmd-Tab / Spaces switches that emit no catchable mouse-down.
+    private func installEventMonitors() {
+        removeEventMonitors() // defensive: never double-install
+        let mask: NSEvent.EventTypeMask = [.leftMouseDown, .rightMouseDown]
+        // Fires only for clicks delivered to other apps — never our button or popover — so any
+        // firing is unambiguously "clicked away".
+        if let global = NSEvent.addGlobalMonitorForEvents(matching: mask, handler: { [weak self] _ in
+            MainActor.assumeIsolated { self?.closePopover() }
+        }) {
+            eventMonitors.append(global)
+        }
+        // Fires for our own events; must not swallow them and must ignore clicks inside the popover
+        // or on the status button.
+        if let local = NSEvent.addLocalMonitorForEvents(matching: mask, handler: { [weak self] event in
+            MainActor.assumeIsolated { self?.handleLocalMouseDown() }
+            return event // never swallow — the click must reach its target
+        }) {
+            eventMonitors.append(local)
+        }
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(appDidResignActive),
+            name: NSApplication.didResignActiveNotification,
+            object: nil
+        )
+    }
+
+    private func removeEventMonitors() {
+        for monitor in eventMonitors {
+            NSEvent.removeMonitor(monitor)
+        }
+        eventMonitors.removeAll()
+        NotificationCenter.default.removeObserver(
+            self, name: NSApplication.didResignActiveNotification, object: nil
+        )
+    }
+
+    /// Geometric outside-click test in screen coordinates. Status-bar clicks often arrive with a
+    /// nil `event.window`, so a window-identity test is unreliable; compare mouse location against
+    /// the popover and button window frames instead.
+    private func handleLocalMouseDown() {
+        let point = NSEvent.mouseLocation
+        if let popWin = popover.contentViewController?.view.window, popWin.frame.contains(point) { return }
+        if let btnWin = statusItem?.button?.window, btnWin.frame.contains(point) { return }
+        closePopover()
+    }
+
+    @objc
+    private func appDidResignActive() {
+        closePopover()
     }
 
     private func showMenu() {
         guard let button = statusItem?.button else { return }
+        // Dismiss the popover first so the Quit menu doesn't pop up over a still-open panel.
+        closePopover()
         // A transient menu shown on demand — assigning `statusItem.menu` would hijack left-click too.
         let menu = NSMenu()
         let quit = NSMenuItem(title: "Quit gbar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -139,9 +208,8 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
 }
 
 extension StatusItemController: NSPopoverDelegate {
-    /// Stamp every close (transient auto-close included) so `togglePopover` can tell a
-    /// dismiss-click apart from a fresh open.
+    /// Tear down the outside-click monitors on every close path (button toggle, monitor, resign).
     nonisolated func popoverDidClose(_: Notification) {
-        MainActor.assumeIsolated { lastPopoverClose = Date() }
+        MainActor.assumeIsolated { removeEventMonitors() }
     }
 }
