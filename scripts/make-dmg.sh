@@ -1,13 +1,15 @@
 #!/usr/bin/env bash
-# Build a distributable .dmg of gbar (Release config, ad-hoc signed) with a
-# drag-to-Applications layout. Uses only hdiutil — no brew/create-dmg dependency.
+# Build a distributable .dmg of gbar (Release config) with a drag-to-Applications
+# layout. Uses only hdiutil — no brew/create-dmg dependency.
 #
 # Usage: scripts/make-dmg.sh [output-dir]   (default output dir: dist/)
 # Prints the path to the created .dmg on stdout.
 #
-# Note: the app is ad-hoc signed and NOT notarized, so first-launch requires
-# right-click → Open (or `xattr -dr com.apple.quarantine gbar.app`). Developer ID
-# signing + notarization is a planned follow-up (see docs/PRODUCT.md).
+# Signing follows Tuist/Config/Release.xcconfig: the release workflow pre-writes a
+# Developer ID Application + hardened-runtime config (then notarizes + staples the DMG),
+# so the shipped build opens with no Gatekeeper prompt. A local `just dmg` without those
+# real values falls back to ad-hoc/teamless signing — that DMG is NOT notarized, so
+# first launch needs right-click → Open (or `xattr -dr com.apple.quarantine gbar.app`).
 
 set -euo pipefail
 

@@ -51,8 +51,14 @@ Injected at build time via `Tuist/Config/{Debug,Release}.xcconfig` → Info.plis
 - `GH_OAUTH_CLIENT_ID` — blank for self-host builds (prompt at runtime), pre-filled for paid.
 - `GH_API_BASE_URL` — defaults to `https://api.github.com`; overridden for Enterprise.
 
-## Distribution (deferred)
+## Distribution
 
-v1 ships as a self-built / ad-hoc-signed binary. Developer ID signing + notarization,
-a Homebrew cask, and GitHub Releases artifacts come in a follow-up once the app is
-feature-complete enough to ship.
+The **paid build** ships as a **Developer ID Application–signed, notarized and stapled**
+DMG attached to each GitHub Release, installable via a Homebrew cask
+(`brew install --cask jaylann/tap/gbar`) — it opens with no Gatekeeper prompt. The release
+workflow (`release.yml`) signs, notarizes, staples and publishes the DMG, then bumps the cask.
+
+**Self-host** builds are still fully supported: a fork with no signing secrets produces an
+ad-hoc-signed, un-notarized DMG (first launch needs right-click → Open), or you can
+`just dmg` locally. Only the signed release bakes in the licensor's OAuth client ID; self-host
+builds ship a blank one and prompt at runtime.

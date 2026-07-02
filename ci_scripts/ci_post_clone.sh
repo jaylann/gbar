@@ -37,6 +37,10 @@ GBAR_CODE_SIGN_IDENTITY = ${GBAR_CODE_SIGN_IDENTITY_DEBUG:--}
 GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_DEBUG:-}
 GBAR_ENTITLEMENTS = ${GBAR_ENTITLEMENTS_DEBUG:-gbar/gbar.entitlements}
 EOF
+    # ENABLE_HARDENED_RUNTIME + OTHER_CODE_SIGN_FLAGS=--timestamp are required for
+    # notarization; they default off so an ad-hoc/teamless release stays buildable
+    # (a secure timestamp needs a real Developer ID identity). A signed release sets
+    # GBAR_ENABLE_HARDENED_RUNTIME_RELEASE=YES and GBAR_OTHER_CODE_SIGN_FLAGS_RELEASE=--timestamp.
     cat > Tuist/Config/Release.xcconfig <<EOF
 GH_OAUTH_CLIENT_ID = ${GH_OAUTH_CLIENT_ID_RELEASE:-}
 GH_API_BASE_URL = https:/\$()/${GH_API_HOST_RELEASE:-api.github.com}
@@ -44,6 +48,8 @@ GBAR_CODE_SIGN_STYLE = ${GBAR_CODE_SIGN_STYLE_RELEASE:-Manual}
 GBAR_CODE_SIGN_IDENTITY = ${GBAR_CODE_SIGN_IDENTITY_RELEASE:--}
 GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_RELEASE:-}
 GBAR_ENTITLEMENTS = ${GBAR_ENTITLEMENTS_RELEASE:-gbar/gbar.entitlements}
+ENABLE_HARDENED_RUNTIME = ${GBAR_ENABLE_HARDENED_RUNTIME_RELEASE:-NO}
+OTHER_CODE_SIGN_FLAGS = ${GBAR_OTHER_CODE_SIGN_FLAGS_RELEASE:-}
 EOF
 else
     echo "ci_post_clone.sh: not running in CI — skipping xcconfig materialization"

@@ -47,7 +47,18 @@ Your tokens are stored in the **macOS Keychain**, never on disk in plaintext.
 SwiftUI (`MenuBarExtra`, `LSUIElement` agent) · macOS 14+ · Swift 6 (strict
 concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
 
-## Setup
+## Install
+
+The signed, notarized build (opens with no Gatekeeper prompt) is on the
+[Homebrew tap](https://github.com/jaylann/homebrew-tap):
+
+```bash
+brew install --cask jaylann/tap/gbar
+```
+
+Or grab the `.dmg` from the [latest release](https://github.com/jaylann/gbar/releases/latest).
+
+## Build from source
 
 ```bash
 just bootstrap   # wire git hooks + materialize local xcconfigs
