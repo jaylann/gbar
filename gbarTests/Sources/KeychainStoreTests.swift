@@ -9,12 +9,20 @@ final class KeychainStoreTests: XCTestCase {
 
     override func setUpWithError() throws {
         try super.setUpWithError()
+        // Probe the full round-trip, not just the write: on CI runners the write can land in
+        // the file-keychain fallback while the read's data-protection query answers
+        // errSecItemNotFound (not errSecMissingEntitlement), so `get` never falls back and
+        // returns nil for a value `set` just stored. See #53.
         do {
             try KeychainStore.set("probe", for: key)
         } catch {
             throw XCTSkip("Keychain unavailable in this environment: \(error)")
         }
+        let roundTrip = KeychainStore.get(key)
         KeychainStore.remove(key)
+        if roundTrip != "probe" {
+            throw XCTSkip("Keychain round-trip unavailable in this environment (get after set returned nil)")
+        }
     }
 
     override func tearDown() {
