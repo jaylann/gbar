@@ -36,16 +36,20 @@ extension MenuContentView {
     /// active filter, so "all" is never ambiguous — show on Inbox.
     var chipsRow: some View {
         HStack(spacing: Theme.Spacing.xs) {
+            // Tab-specific chips cross-fade when the tab changes (driven by the
+            // `.animation(value: selectedTab)` on `chipsRow` at the call site).
             if selectedTab == .prs {
-                FilterChip(title: "All", isOn: chipBinding(.all))
+                FilterChip(title: "All", isOn: chipBinding(.all)).transition(.opacity)
                 FilterChip(title: "Failing CI", symbol: "xmark.octagon", isOn: chipBinding(.failingCI))
-                FilterChip(title: "Needs review", symbol: "eye", isOn: chipBinding(.needsReview))
+                    .transition(.opacity)
+                FilterChip(title: "Needs review", symbol: "eye", isOn: chipBinding(.needsReview)).transition(.opacity)
             }
             if selectedTab == .notifications {
-                FilterChip(title: "All", isOn: inboxChipBinding(.all))
+                FilterChip(title: "All", isOn: inboxChipBinding(.all)).transition(.opacity)
                 FilterChip(title: "Review requested", symbol: "eye", isOn: inboxChipBinding(.reviewRequested))
-                FilterChip(title: "Mentioned", symbol: "at", isOn: inboxChipBinding(.mentioned))
-                FilterChip(title: "Assigned", symbol: "person", isOn: inboxChipBinding(.assigned))
+                    .transition(.opacity)
+                FilterChip(title: "Mentioned", symbol: "at", isOn: inboxChipBinding(.mentioned)).transition(.opacity)
+                FilterChip(title: "Assigned", symbol: "person", isOn: inboxChipBinding(.assigned)).transition(.opacity)
             }
             FilterChip(title: "Starred", symbol: "star", isOn: starredBinding)
             Spacer(minLength: 0)
@@ -63,11 +67,17 @@ extension MenuContentView {
     }
 
     /// Drives a `FilterChip` as a radio button: turning one on selects that mode; turning the
-    /// active one off resets to `.all`.
+    /// active one off resets to `.all`. The list diff is animated here at the toggle (rather than
+    /// via an ambient `.animation` on the list) so the rows fade/reflow on a deliberate action
+    /// without a persistent modifier slowing scroll — the same tactic as `MenuRows.setMode`.
     private func chipBinding(_ filter: PRFilter) -> Binding<Bool> {
         Binding(
             get: { prFilter == filter },
-            set: { isOn in prFilter = isOn ? filter : .all }
+            set: { isOn in
+                withAnimation(Motion.respecting(reduceMotion, Motion.spring)) {
+                    prFilter = isOn ? filter : .all
+                }
+            }
         )
     }
 
@@ -75,13 +85,22 @@ extension MenuContentView {
     private func inboxChipBinding(_ reason: InboxReason) -> Binding<Bool> {
         Binding(
             get: { inboxReason == reason },
-            set: { isOn in inboxReason = isOn ? reason : .all }
+            set: { isOn in
+                withAnimation(Motion.respecting(reduceMotion, Motion.spring)) {
+                    inboxReason = isOn ? reason : .all
+                }
+            }
         )
     }
 
     /// A plain on/off binding for the cross-tab "Starred" toggle. Built here (rather than passing
     /// `$starredOnly` across files) so `starredOnly` can stay a `@State` on the view.
     private var starredBinding: Binding<Bool> {
-        Binding(get: { starredOnly }, set: { starredOnly = $0 })
+        Binding(
+            get: { starredOnly },
+            set: { newValue in
+                withAnimation(Motion.respecting(reduceMotion, Motion.spring)) { starredOnly = newValue }
+            }
+        )
     }
 }
