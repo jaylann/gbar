@@ -1,8 +1,12 @@
+<p align="center">
+  <img src="assets/icon/app-icon.png" width="120" alt="gbar">
+</p>
+
 <h1 align="center">gbar</h1>
 
 <p align="center">
   A general <strong>GitHub companion in your macOS menu bar</strong> — pull requests,
-  issues, CI status, notifications and quick actions, always one glance away.
+  issues, CI, notifications and quick actions, always one glance away.
 </p>
 
 <p align="center">
@@ -16,13 +20,18 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue" alt="License: PolyForm Shield 1.0.0"></a>
   <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
+  <a href="https://tuist.dev"><img src="https://img.shields.io/badge/built%20with-Tuist-blueviolet" alt="Built with Tuist"></a>
 </p>
 
 ---
 
-## What it does
+**gbar** puts everything you track on GitHub — pull requests, issues, CI status,
+notifications and quick actions — into your macOS menu bar, one glance away. It's like
+[PullBar](https://github.com/menubar-apps/PullBar), but broader: a *general* GitHub bar,
+not a PR-only viewer. Free to run, self-host and modify; source-available under PolyForm
+Shield.
 
-gbar lives in your menu bar and pulls together everything you care about on GitHub:
+## Features
 
 - **Pull requests** — created / assigned / review-requested / mentioned, with author,
   approvals, +/- line counts and age.
@@ -30,8 +39,12 @@ gbar lives in your menu bar and pulls together everything you care about on GitH
 - **Rich CI / checks** — per-check pass/fail/pending status on your PRs.
 - **Quick actions** — open in browser, approve, merge, mark notifications read.
 - **Desktop notifications** — new PRs, review requests, status changes.
-- **Multiple accounts, orgs & GitHub Enterprise** — point it at any API base URL.
+- **Starred signal** — a star marker on any row whose repo you've starred, plus a
+  cross-tab "Starred" filter.
+- **Watchlist → Actions & Releases** — curated `owner/name` repos feed a workflow-runs
+  tab and a "what shipped" releases digest.
 - **Custom saved queries** — any GitHub search string becomes its own menu section.
+- **Multiple accounts, orgs & GitHub Enterprise** — point it at any API base URL.
 
 See [`docs/PRODUCT.md`](docs/PRODUCT.md) for the full scope and roadmap.
 
@@ -49,11 +62,6 @@ gbar is **free to run, self-host and modify**. Authentication uses GitHub's OAut
   [lanfermann.dev](https://lanfermann.dev).
 
 Your tokens are stored in the **macOS Keychain**, never on disk in plaintext.
-
-## Stack
-
-SwiftUI (`MenuBarExtra`, `LSUIElement` agent) · macOS 14+ · Swift 6 (strict
-concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
 
 ## Install
 
@@ -75,6 +83,11 @@ just build       # build the macOS app
 just run         # build and launch
 ```
 
+## Stack
+
+SwiftUI (`MenuBarExtra`, `LSUIElement` agent) · macOS 14+ · Swift 6 (strict
+concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
+
 ## Conventions
 
 - **Branches:** `stage` is the working branch; `main` is release/tag-only.
@@ -87,5 +100,5 @@ just run         # build and launch
 **Source-available under the [PolyForm Shield License 1.0.0](LICENSE).** You may use,
 self-host, modify and redistribute gbar freely — but **not** to build a product or
 service that competes with gbar or with the paid/hosted gbar offering. This is *not*
-an OSI-approved "open source" license; that's deliberate, so the paid tier that funds
-the project can't simply be resold out from under it.
+an OSI-approved license; that's deliberate, so the paid tier that funds the project
+can't simply be resold out from under it.
