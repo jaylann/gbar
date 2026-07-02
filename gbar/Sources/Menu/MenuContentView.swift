@@ -26,6 +26,24 @@ private enum PRFilter {
     case needsReview
 }
 
+/// Single-select filter mode for the Inbox tab, surfaced as `FilterChip`s. Matches the raw
+/// REST `reason` strings directly (rather than `NotificationRow.Model.Reason`) so filtering
+/// stays decoupled from the row's display mapping.
+private enum InboxReason {
+    case all
+    case reviewRequested
+    case mentioned
+    case assigned
+    func matches(_ raw: String) -> Bool {
+        switch self {
+        case .all: true
+        case .reviewRequested: raw == "review_requested"
+        case .mentioned: raw == "mention"
+        case .assigned: raw == "assign"
+        }
+    }
+}
+
 /// The status-item popover, built on the design system: a consolidated top bar — inline
 /// `PRs | Issues | Inbox` tabs on the left, a search toggle, refresh, and a Settings gear on
 /// the right — with a search field that slides in on demand and PR filter chips on the PRs tab.
@@ -43,6 +61,7 @@ struct MenuContentView: View {
     @State private var searchText = ""
     @State private var searchActive = false
     @State private var prFilter: PRFilter = .all
+    @State private var inboxReason: InboxReason = .all
     @FocusState private var searchFocused: Bool
 
     private var selectedTab: MenuTab {
@@ -67,7 +86,10 @@ struct MenuContentView: View {
                         searchRow
                     }
                     if showsFilters, selectedTab == .prs {
-                        chipsRow
+                        prChipsRow
+                    }
+                    if showsFilters, selectedTab == .notifications {
+                        inboxChipsRow
                     }
                     Divider()
                     tabContent
@@ -172,12 +194,32 @@ struct MenuContentView: View {
             .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    private var chipsRow: some View {
+    private var prChipsRow: some View {
         HStack(spacing: Theme.Spacing.xs) {
             FilterChip(title: "All", isOn: chipBinding(.all))
             FilterChip(title: "Failing CI", symbol: "xmark.octagon", isOn: chipBinding(.failingCI))
             FilterChip(title: "Needs review", symbol: "eye", isOn: chipBinding(.needsReview))
             Spacer(minLength: 0)
+        }
+        .padding(.horizontal, Theme.Spacing.md)
+        .padding(.bottom, Theme.Spacing.sm)
+    }
+
+    /// Reason filter chips for the Inbox, plus a trailing "Mark all read" that only appears
+    /// with unread present and no active filter — so "all" is never ambiguous. Repo scoping is
+    /// intentionally left to the free-text search (which matches `repository.fullName`).
+    private var inboxChipsRow: some View {
+        HStack(spacing: Theme.Spacing.xs) {
+            FilterChip(title: "All", isOn: inboxChipBinding(.all))
+            FilterChip(title: "Review requested", symbol: "eye", isOn: inboxChipBinding(.reviewRequested))
+            FilterChip(title: "Mentioned", symbol: "at", isOn: inboxChipBinding(.mentioned))
+            FilterChip(title: "Assigned", symbol: "person", isOn: inboxChipBinding(.assigned))
+            Spacer(minLength: 0)
+            if !isFiltering, store.unreadNotificationCount > 0 {
+                Button("Mark all read") { Task { await store.markAllRead() } }
+                    .buttonStyle(GBButtonStyle(variant: .ghost))
+                    .gbTooltip("Mark all as read", edge: .bottom)
+            }
         }
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.bottom, Theme.Spacing.sm)
@@ -231,6 +273,14 @@ struct MenuContentView: View {
         Binding(
             get: { prFilter == filter },
             set: { isOn in prFilter = isOn ? filter : .all }
+        )
+    }
+
+    /// Radio-style binding for the Inbox reason chips, mirroring `chipBinding`.
+    private func inboxChipBinding(_ reason: InboxReason) -> Binding<Bool> {
+        Binding(
+            get: { inboxReason == reason },
+            set: { isOn in inboxReason = isOn ? reason : .all }
         )
     }
 
@@ -304,7 +354,9 @@ struct MenuContentView: View {
     }
 
     private var notificationList: some View {
-        let items = store.visibleNotifications.filter { matchesSearch($0.notification) }
+        let items = store.visibleNotifications.filter {
+            matchesSearch($0.notification) && inboxReason.matches($0.notification.reason)
+        }
         return tabScaffold(isEmpty: items.isEmpty) {
             emptyState(caughtUpTitle: "Inbox zero", caughtUpMessage: "Nothing unread right now.")
         } content: {
@@ -430,7 +482,9 @@ extension MenuContentView {
     }
 
     private var isFiltering: Bool {
-        !trimmedSearch.isEmpty || (selectedTab == .prs && prFilter != .all)
+        !trimmedSearch.isEmpty
+            || (selectedTab == .prs && prFilter != .all)
+            || (selectedTab == .notifications && inboxReason != .all)
     }
 
     private func matchesSearch(_ item: SearchIssue) -> Bool {
