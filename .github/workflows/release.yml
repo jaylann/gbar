@@ -98,10 +98,13 @@ jobs:
           git merge origin/main --no-edit
           # The push must authenticate as the release bot (a ruleset bypass actor) or the stage
           # ruleset rejects it with GH013 (required checks + PR-only). actions/checkout persists
-          # GITHUB_TOKEN as a URL-scoped http.<host>.extraheader; that Authorization header is more
-          # specific than a plain URL credential and wins, so a `@github.com` token URL alone still
-          # pushes as github-actions[bot] (NOT a bypass actor). Override the *same* URL-scoped
-          # header with the bot token for this one push so the bot identity actually applies.
+          # GITHUB_TOKEN as a URL-scoped http.<host>.extraheader Authorization header; it outranks
+          # a token-in-URL credential, so the push would go out as github-actions[bot] (NOT a
+          # bypass actor). And adding a second extraheader via `-c` while the persisted one is
+          # still set sends BOTH → "Duplicate header: Authorization" → HTTP 400. So: remove the
+          # persisted header first (the tag push above already happened and no longer needs it),
+          # then push with the bot token as the only Authorization header.
+          git config --unset-all http."https://github.com/".extraheader || true
           AUTH=$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')
           git -c http."https://github.com/".extraheader="Authorization: Basic ${AUTH}" \
             push origin HEAD:stage
@@ -121,11 +124,15 @@ jobs:
     # Each signing/notary/cask step is gated on these so a self-host fork with no secrets
     # still produces a working (ad-hoc, un-notarized) DMG instead of failing the job.
     env:
-      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
+      # Signing needs cert + team + a Developer ID provisioning profile: on macOS the profile
+      # must validate the sandbox's application-identifier/keychain-access-groups entitlements,
+      # or the built app won't launch ("Launchd job spawn failed"). All three or ad-hoc.
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' && secrets.GBAR_PROVISIONING_PROFILE != '' }}
       # Notarization requires a Developer-ID-signed app, so it also depends on the signing
       # cert — otherwise a partial-secrets config would submit an ad-hoc DMG that Apple rejects.
-      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
-      HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' && secrets.GBAR_PROVISIONING_PROFILE != '' }}
+      # Cask push authenticates as the release bot (GitHub App installed on jaylann/homebrew-tap).
+      HAS_TAP: ${{ secrets.RP_APP_KEY != '' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -157,19 +164,31 @@ jobs:
           security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
           rm -f "$CERT_PATH"
 
+      # Install the Developer ID provisioning profile for dev.lanfermann.gbar. It validates
+      # the application-identifier + keychain-access-groups entitlements at build time — on
+      # macOS a sandboxed app with an unvalidated keychain group is refused by launchd
+      # ("Launchd job spawn failed"), which is exactly what broke the v0.2.2 DMG (re-signed
+      # with the group but no profile). With the profile installed, Xcode happily builds the
+      # keychain group under Manual signing and the re-sign hack is unnecessary.
+      - name: Install provisioning profile
+        if: env.HAS_SIGNING == 'true'
+        env:
+          GBAR_PROVISIONING_PROFILE: ${{ secrets.GBAR_PROVISIONING_PROFILE }}
+        run: |
+          PROFILE_DIR="$HOME/Library/MobileDevice/Provisioning Profiles"
+          mkdir -p "$PROFILE_DIR"
+          echo -n "$GBAR_PROVISIONING_PROFILE" | base64 --decode \
+            -o "$PROFILE_DIR/gbar-developer-id.provisionprofile"
+
       # Pre-write Release.xcconfig with Developer ID + hardened-runtime values. make-dmg.sh
       # runs `just _xcconfig`, which only BACKFILLS missing keys, so this file is respected.
       # This is also where the paid build's baked GH OAuth client ID is materialized (#4).
       #
-      # Signing notes (verified locally against the real Developer ID cert):
-      #  - Entitlements are handled by make-dmg.sh, not here: a team-signed build re-signs the app
-      #    with gbar/gbar-release.entitlements (App Sandbox + a literal <team>-prefixed
-      #    keychain-access-group). It can't go in the build itself — Xcode demands a provisioning
-      #    profile for a keychain group under Manual signing — so it's applied by a post-build
-      #    codesign, which accepts it under Developer ID with no profile. Under App Sandbox a
-      #    missing group makes every SecItem call fail (errSecMissingEntitlement), breaking sign-in
-      #    + token reads; the group fixes that. (GBAR_ENTITLEMENTS below stays gbar/gbar.entitlements
-      #    as the teamless fallback / the as-built entitlements before the re-sign.)
+      # Signing notes:
+      #  - GBAR_ENTITLEMENTS = gbar-signed.entitlements: App Sandbox + $(AppIdentifierPrefix)
+      #    keychain-access-group — same file the team dev build uses. Valid at build time here
+      #    because the installed Developer ID provisioning profile
+      #    (GBAR_PROVISIONING_PROFILE_SPECIFIER) authorizes it; see the install step above.
       #  - CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO: `xcodebuild build` with Manual signing
       #    injects com.apple.security.get-task-allow, which notarization rejects.
       # Body must be valid xcconfig (KEY = VALUE / `//` comments only) — no `#` lines.
@@ -178,6 +197,7 @@ jobs:
         env:
           GH_OAUTH_CLIENT_ID_RELEASE: ${{ secrets.GH_OAUTH_CLIENT_ID_RELEASE }}
           GBAR_DEVELOPMENT_TEAM_RELEASE: ${{ secrets.GBAR_DEVELOPMENT_TEAM_RELEASE }}
+          GBAR_PROVISIONING_PROFILE_NAME: ${{ secrets.GBAR_PROVISIONING_PROFILE_NAME }}
         run: |
           mkdir -p Tuist/Config
           cat > Tuist/Config/Release.xcconfig <<EOF
@@ -186,7 +206,8 @@ jobs:
           GBAR_CODE_SIGN_STYLE = Manual
           GBAR_CODE_SIGN_IDENTITY = Developer ID Application
           GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_RELEASE}
-          GBAR_ENTITLEMENTS = gbar/gbar.entitlements
+          GBAR_ENTITLEMENTS = gbar/gbar-signed.entitlements
+          GBAR_PROVISIONING_PROFILE_SPECIFIER = ${GBAR_PROVISIONING_PROFILE_NAME:-gbar Developer ID}
           ENABLE_HARDENED_RUNTIME = YES
           OTHER_CODE_SIGN_FLAGS = --timestamp
           CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
@@ -235,11 +256,23 @@ jobs:
           gh release upload "${{ needs.tag.outputs.tag }}" "${{ steps.build.outputs.path }}" --clobber
 
       # Regenerate the Homebrew cask in jaylann/homebrew-tap so `brew install --cask
-      # jaylann/tap/gbar` picks up the new version. Gated on the tap token existing.
+      # jaylann/tap/gbar` picks up the new version. Pushes as the lanfermann-release-bot
+      # GitHub App (must be installed on jaylann/homebrew-tap with Contents: read/write);
+      # skipped on forks without the app key.
+      - name: Mint tap token
+        if: env.HAS_TAP == 'true'
+        id: tap-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_KEY }}
+          owner: jaylann
+          repositories: homebrew-tap
+
       - name: Update Homebrew cask
         if: env.HAS_TAP == 'true'
         env:
-          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ steps.tap-token.outputs.token }}
           VERSION: ${{ needs.tag.outputs.version }}
           DMG_PATH: ${{ steps.build.outputs.path }}
         run: |
