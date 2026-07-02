@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- trunk + trunk nodes (graphite parts (light-mode variant of white.svg)) -->
+  <rect x="352" y="260" width="80" height="544" rx="40" fill="#2A2F36"/>
+  <circle cx="392" cy="300" r="80" fill="#2A2F36"/>
+  <circle cx="392" cy="724" r="80" fill="#2A2F36"/>
+</svg>
