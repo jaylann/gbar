@@ -8,8 +8,8 @@ let bundleId = "dev.lanfermann.gbar"
 let deploymentTarget: DeploymentTargets = .macOS("14.0")
 
 // source of truth for release.yml — the release workflow greps these two lines.
-let marketingVersion = "0.3.0"
-let buildNumber = "8"
+let marketingVersion = "0.4.0"
+let buildNumber = "9"
 
 let baseSettings: SettingsDictionary = [
     "SWIFT_VERSION": "6.0",
