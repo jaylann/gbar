@@ -159,10 +159,13 @@ jobs:
       # This is also where the paid build's baked GH OAuth client ID is materialized (#4).
       #
       # Signing notes (verified locally against the real Developer ID cert):
-      #  - GBAR_ENTITLEMENTS = gbar/gbar.entitlements (NOT gbar-signed): Developer ID *Manual*
-      #    signing has no provisioning profile, so keychain-access-groups would fail the build
-      #    ("requires a provisioning profile"). KeychainStore falls back to the file-based
-      #    keychain, whose ACL is bound to the stable Developer ID signature (no recurring prompt).
+      #  - Entitlements are chosen by make-dmg.sh, not here: a team-signed build materializes
+      #    gbar/gbar-release.entitlements (App Sandbox + a literal <team>-prefixed
+      #    keychain-access-group) and overrides CODE_SIGN_ENTITLEMENTS with it. Under App Sandbox
+      #    a missing keychain group makes every SecItem call fail (errSecMissingEntitlement),
+      #    which breaks sign-in + token reads — the group fixes that. A literal team-prefixed
+      #    group is valid under Developer ID *Manual* signing with no provisioning profile.
+      #    (GBAR_ENTITLEMENTS below stays gbar/gbar.entitlements as the teamless fallback.)
       #  - CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO: `xcodebuild build` with Manual signing
       #    injects com.apple.security.get-task-allow, which notarization rejects.
       # Body must be valid xcconfig (KEY = VALUE / `//` comments only) — no `#` lines.
