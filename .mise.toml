@@ -1,3 +1,6 @@
 [tools]
 tuist = "4.195.11"
 swift = "6.0"
+# Spellcheck (crate-ci/typos) — `just check` runs it locally; CI installs tuist + typos
+# via mise (jdx/mise-action) so it runs exactly these pinned versions.
+typos = "1.48.0"

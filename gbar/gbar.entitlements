@@ -8,5 +8,9 @@
 	<!-- Outbound HTTPS to the GitHub API (and Enterprise hosts). -->
 	<key>com.apple.security.network.client</key>
 	<true/>
+	<!-- NOTE: no keychain-access-groups here — this is the teamless/ad-hoc default (fresh
+	     clone / CI), where that entitlement would require a provisioning profile and fail the
+	     build. A team-signed build selects gbar-signed.entitlements via GBAR_ENTITLEMENTS,
+	     which adds the group; teamless builds fall back to the file-based keychain. -->
 </dict>
 </plist>

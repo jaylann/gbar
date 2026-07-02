@@ -27,6 +27,11 @@ actor DeviceFlowClient {
         let interval: Int?
     }
 
+    /// Scopes gbar requests for a device-flow token: `repo` (PR/issue data + quick actions)
+    /// and `notifications` (the inbox). Shared by the Settings sign-in and the in-place 401
+    /// reconnect so both grants stay identical.
+    static let defaultScopes = ["repo", "notifications"]
+
     let clientID: String
     /// Web host that serves the device-flow endpoints (github.com, or an Enterprise host).
     let webBaseURL: URL

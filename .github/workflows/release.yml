@@ -17,18 +17,26 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tag:
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    permissions:
+      contents: write
+    # The stage ruleset requires green checks on pushes, which the sync merge commit can't
+    # have. The lanfermann-release-bot app is a ruleset bypass actor, so the sync pushes
+    # with its token. Gated on the key existing → a self-host fork (no ruleset, no secret)
+    # still syncs fine with GITHUB_TOKEN.
+    env:
+      HAS_BOT: ${{ secrets.RP_APP_KEY != '' }}
     outputs:
       created: ${{ steps.check.outputs.exists == 'false' }}
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -68,33 +76,173 @@ jobs:
             --target main \
             --generate-notes
 
+      - name: Mint release-bot token
+        if: steps.check.outputs.exists == 'false' && env.HAS_BOT == 'true'
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_KEY }}
+
       - name: Sync stage to main
         if: steps.check.outputs.exists == 'false'
+        env:
+          PUSH_TOKEN: ${{ steps.bot-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: |
           git fetch origin stage
           git checkout stage
           git merge origin/main --no-edit
-          git push origin stage
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" stage
 
   dmg:
     needs: tag
     if: needs.tag.outputs.created == 'true'
     runs-on: macos-15
     timeout-minutes: 30
+    permissions:
+      contents: write
+    # Secrets can't be used in `if:` directly, so surface presence as job-level booleans.
+    # Each signing/notary/cask step is gated on these so a self-host fork with no secrets
+    # still produces a working (ad-hoc, un-notarized) DMG instead of failing the job.
+    env:
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
+      # Notarization requires a Developer-ID-signed app, so it also depends on the signing
+      # cert — otherwise a partial-secrets config would submit an ad-hoc DMG that Apple rejects.
+      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
+      HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
       - name: Install tools
         run: brew install tuist just
 
+      # Import the Developer ID Application cert into a throwaway keychain so codesign
+      # (invoked by xcodebuild during make-dmg.sh) can sign with it non-interactively.
+      - name: Import signing certificate
+        if: env.HAS_SIGNING == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PWD: ${{ secrets.MACOS_CERTIFICATE_PWD }}
+          MACOS_KEYCHAIN_PWD: ${{ secrets.MACOS_KEYCHAIN_PWD }}
+        run: |
+          KEYCHAIN_PATH="$RUNNER_TEMP/gbar-signing.keychain-db"
+          CERT_PATH="$RUNNER_TEMP/gbar-cert.p12"
+          echo -n "$MACOS_CERTIFICATE" | base64 --decode -o "$CERT_PATH"
+          security create-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -P "$MACOS_CERTIFICATE_PWD" \
+            -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: \
+            -k "$MACOS_KEYCHAIN_PWD" "$KEYCHAIN_PATH" >/dev/null
+          # Put our keychain first in the search list so xcodebuild finds the identity.
+          security list-keychain -d user -s "$KEYCHAIN_PATH" login.keychain-db
+          rm -f "$CERT_PATH"
+
+      # Pre-write Release.xcconfig with Developer ID + hardened-runtime values. make-dmg.sh
+      # runs `just _xcconfig`, which only BACKFILLS missing keys, so this file is respected.
+      # This is also where the paid build's baked GH OAuth client ID is materialized (#4).
+      #
+      # Signing notes (verified locally against the real Developer ID cert):
+      #  - GBAR_ENTITLEMENTS = gbar/gbar.entitlements (NOT gbar-signed): Developer ID *Manual*
+      #    signing has no provisioning profile, so keychain-access-groups would fail the build
+      #    ("requires a provisioning profile"). KeychainStore falls back to the file-based
+      #    keychain, whose ACL is bound to the stable Developer ID signature (no recurring prompt).
+      #  - CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO: `xcodebuild build` with Manual signing
+      #    injects com.apple.security.get-task-allow, which notarization rejects.
+      # Body must be valid xcconfig (KEY = VALUE / `//` comments only) — no `#` lines.
+      - name: Write signed Release.xcconfig
+        if: env.HAS_SIGNING == 'true'
+        env:
+          GH_OAUTH_CLIENT_ID_RELEASE: ${{ secrets.GH_OAUTH_CLIENT_ID_RELEASE }}
+          GBAR_DEVELOPMENT_TEAM_RELEASE: ${{ secrets.GBAR_DEVELOPMENT_TEAM_RELEASE }}
+        run: |
+          mkdir -p Tuist/Config
+          cat > Tuist/Config/Release.xcconfig <<EOF
+          GH_OAUTH_CLIENT_ID = ${GH_OAUTH_CLIENT_ID_RELEASE:-}
+          GH_API_BASE_URL = https:/\$()/api.github.com
+          GBAR_CODE_SIGN_STYLE = Manual
+          GBAR_CODE_SIGN_IDENTITY = Developer ID Application
+          GBAR_DEVELOPMENT_TEAM = ${GBAR_DEVELOPMENT_TEAM_RELEASE}
+          GBAR_ENTITLEMENTS = gbar/gbar.entitlements
+          ENABLE_HARDENED_RUNTIME = YES
+          OTHER_CODE_SIGN_FLAGS = --timestamp
+          CODE_SIGN_INJECT_BASE_ENTITLEMENTS = NO
+          EOF
+
       - name: Build DMG
         id: build
-        run: echo "path=$(./scripts/make-dmg.sh dist)" >> "$GITHUB_OUTPUT"
+        run: |
+          DMG=$(./scripts/make-dmg.sh dist)
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
+
+      # Sign the DMG itself with Developer ID (make-dmg.sh signs the app, not the container).
+      # A signed + notarized + stapled DMG passes `spctl -t open` offline, not just the app.
+      # Verified locally (2026-07-02): spctl → "accepted, source=Notarized Developer ID".
+      - name: Sign DMG
+        if: env.HAS_SIGNING == 'true'
+        run: |
+          codesign --force --timestamp \
+            --sign "Developer ID Application" "${{ steps.build.outputs.path }}"
+
+      # Notarize the DMG (contains a Developer-ID-signed, hardened-runtime app), then staple
+      # the ticket so Gatekeeper accepts it offline. Skipped on self-host forks (no secrets).
+      - name: Notarize DMG
+        if: env.HAS_NOTARY == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          GBAR_DEVELOPMENT_TEAM_RELEASE: ${{ secrets.GBAR_DEVELOPMENT_TEAM_RELEASE }}
+        run: |
+          xcrun notarytool submit "${{ steps.build.outputs.path }}" \
+            --apple-id "$NOTARY_APPLE_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --team-id "$GBAR_DEVELOPMENT_TEAM_RELEASE" \
+            --wait
+
+      - name: Staple notarization ticket
+        if: env.HAS_NOTARY == 'true'
+        run: |
+          xcrun stapler staple "${{ steps.build.outputs.path }}"
+          xcrun stapler validate "${{ steps.build.outputs.path }}"
 
       - name: Upload DMG to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release upload "${{ needs.tag.outputs.tag }}" "${{ steps.build.outputs.path }}" --clobber
+
+      # Regenerate the Homebrew cask in jaylann/homebrew-tap so `brew install --cask
+      # jaylann/tap/gbar` picks up the new version. Gated on the tap token existing.
+      - name: Update Homebrew cask
+        if: env.HAS_TAP == 'true'
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.tag.outputs.version }}
+          DMG_PATH: ${{ steps.build.outputs.path }}
+        run: |
+          SHA=$(shasum -a 256 "$DMG_PATH" | awk '{print $1}')
+          git clone --depth 1 \
+            "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jaylann/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cat > tap/Casks/gbar.rb <<EOF
+          cask "gbar" do
+            version "${VERSION}"
+            sha256 "${SHA}"
+
+            url "https://github.com/jaylann/gbar/releases/download/v#{version}/gbar-#{version}.dmg"
+            name "gbar"
+            desc "General GitHub companion in your macOS menu bar"
+            homepage "https://github.com/jaylann/gbar"
+
+            app "gbar.app"
+          end
+          EOF
+          cd tap
+          git config user.email "release-bot@users.noreply.github.com"
+          git config user.name "gbar release bot"
+          git add Casks/gbar.rb
+          git commit -m "gbar ${VERSION}" || { echo "no cask change"; exit 0; }
+          git push

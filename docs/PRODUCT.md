@@ -25,13 +25,17 @@ but aims broader — a *general* GitHub bar, not a PR-only viewer.
 - **Desktop notifications:** new PRs, review requests assigned to you, status changes.
 - **Multiple accounts / orgs** and **GitHub Enterprise** (custom API base URL).
 - **Custom saved queries:** arbitrary GitHub search strings become menu sections.
+- **Starred signal:** a star marker on any PR/issue/inbox row whose repo you've starred,
+  plus a cross-tab "Starred" filter (read-only; sourced from `/user/starred`).
+- **Watchlist → Actions & Releases:** a curated set of `owner/name` repos (Settings ▸
+  Watchlist) feeds two tabs — GitHub Actions workflow runs (incl. non-PR / scheduled /
+  manual runs) and a "what shipped" releases digest. The watchlist is the *only* scope for
+  these per-repo surfaces, keeping the request fan-out bounded.
 - Configurable poll interval; menu-bar badge with counts.
 
 ### Backlog (post-v1)
 Keeps the "general GitHub bar" promise:
-- Full **notifications inbox** (the `/notifications` feed).
-- **Releases**, **GitHub Actions** workflow-run status, starred/watched repos,
-  discussions, gists.
+- **Discussions**, **gists**.
 - **Real-time** updates via a hosted webhook backend (the paid convenience tier), instead
   of polling.
 
@@ -51,8 +55,14 @@ Injected at build time via `Tuist/Config/{Debug,Release}.xcconfig` → Info.plis
 - `GH_OAUTH_CLIENT_ID` — blank for self-host builds (prompt at runtime), pre-filled for paid.
 - `GH_API_BASE_URL` — defaults to `https://api.github.com`; overridden for Enterprise.
 
-## Distribution (deferred)
+## Distribution
 
-v1 ships as a self-built / ad-hoc-signed binary. Developer ID signing + notarization,
-a Homebrew cask, and GitHub Releases artifacts come in a follow-up once the app is
-feature-complete enough to ship.
+The **paid build** ships as a **Developer ID Application–signed, notarized and stapled**
+DMG attached to each GitHub Release, installable via a Homebrew cask
+(`brew install --cask jaylann/tap/gbar`) — it opens with no Gatekeeper prompt. The release
+workflow (`release.yml`) signs, notarizes, staples and publishes the DMG, then bumps the cask.
+
+**Self-host** builds are still fully supported: a fork with no signing secrets produces an
+ad-hoc-signed, un-notarized DMG (first launch needs right-click → Open), or you can
+`just dmg` locally. Only the signed release bakes in the licensor's OAuth client ID; self-host
+builds ship a blank one and prompt at runtime.

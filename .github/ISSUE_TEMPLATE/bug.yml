@@ -1,0 +1,57 @@
+name: Bug report
+description: Something in gbar is broken or behaving wrong.
+labels: ["bug"]
+body:
+  - type: input
+    id: gbar-version
+    attributes:
+      label: gbar version
+      description: Menu → Settings → About, or the release you downloaded.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: "macOS 15.5 (Sequoia)"
+    validations:
+      required: true
+  - type: dropdown
+    id: auth-mode
+    attributes:
+      label: Auth mode
+      options:
+        - OAuth device flow (own client ID / self-host)
+        - OAuth device flow (paid pre-configured build)
+        - Personal access token (PAT)
+        - Not signed in / auth itself is the problem
+    validations:
+      required: true
+  - type: dropdown
+    id: github-host
+    attributes:
+      label: GitHub host
+      options:
+        - GitHub.com
+        - GitHub Enterprise (custom API base URL)
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+      placeholder: |
+        1. Open the menu
+        2. Click "Approve" on a PR
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots (optional)
+      description: >
+        Console.app logs (subsystem `dev.lanfermann.gbar`) or a screenshot help a lot.
+        **Redact tokens and private repo names.**

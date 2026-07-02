@@ -106,6 +106,7 @@ analyzer_rules:
 excluded:
   - DerivedData
   - Derived
+  - .claude          # worktrees under .claude/worktrees are separate checkouts
   - .build
   - Tuist/.build
   - build

@@ -23,32 +23,55 @@ bootstrap:
     git config core.hooksPath .githooks
     echo "✓ core.hooksPath → .githooks"
     echo "  commit-msg hook now validates Conventional Commits."
-    # Materialize the gitignored Tuist xcconfigs from their tracked templates so a
-    # fresh clone can `just gen`/`just build` without a "Configuration file not
-    # found / Fatal linting" error. These hold PLACEHOLDER values — real per-env
-    # keys (a baked GH OAuth client ID for the paid build) come from CI env.
+    # Materialize + backfill the gitignored Tuist xcconfigs so a fresh clone can
+    # `just gen`/`just build` without a "Configuration file not found / Fatal linting"
+    # error. These hold PLACEHOLDER values — real per-env keys (a baked GH OAuth client
+    # ID for the paid build) come from CI env.
+    just _xcconfig
+    echo "✓ materialized Tuist/Config/*.xcconfig from templates (fill in real keys)"
+
+# ─── Project generation ─────────────────────────────────────────────
+
+# Materialize the gitignored Tuist xcconfigs from their tracked templates (idempotent),
+# then backfill any missing GBAR_* signing keys on pre-existing xcconfigs so Project.swift's
+# $(GBAR_*) references always resolve — a missing key resolves to empty and breaks signing.
+# Kept separate so `gen` is self-sufficient on a fresh clone / CI checkout.
+_xcconfig:
+    #!/usr/bin/env bash
+    set -euo pipefail
     for cfg in Debug Release; do
         target="Tuist/Config/${cfg}.xcconfig"
         template="${target}.template"
         if [[ ! -f "$target" && -f "$template" ]]; then
             cp "$template" "$target"
-            echo "✓ materialized $target from template (PLACEHOLDER values — fill in real keys)"
         fi
+        [[ -f "$target" ]] || continue
+        # Ad-hoc/teamless defaults; edit these locally to sign with a real team (which
+        # enables the data-protection keychain and stops the recurring keychain prompt).
+        add_key() { grep -qE "^[[:space:]]*$1[[:space:]]*=" "$target" || printf '%s = %s\n' "$1" "$2" >> "$target"; }
+        add_key GBAR_CODE_SIGN_STYLE Manual
+        add_key GBAR_CODE_SIGN_IDENTITY -
+        add_key GBAR_DEVELOPMENT_TEAM ""
+        add_key GBAR_ENTITLEMENTS gbar/gbar.entitlements
     done
 
-# ─── Project generation ─────────────────────────────────────────────
-
 # Install Tuist deps and regenerate the Xcode project
-gen:
+gen: _xcconfig
     tuist install
     tuist generate --no-open
     @just lsp-setup
 
 # Regenerate buildServer.json so sourcekit-lsp (swift-lsp plugin) resolves
 # cross-module symbols. The file is machine-specific (absolute DerivedData paths)
-# and gitignored.
+# and gitignored. No-op where xcode-build-server isn't installed (e.g. CI).
 lsp-setup:
-    xcode-build-server config -workspace {{project}}.xcworkspace -scheme {{project}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if command -v xcode-build-server >/dev/null 2>&1; then
+        xcode-build-server config -workspace {{project}}.xcworkspace -scheme {{project}}
+    else
+        echo "xcode-build-server not installed — skipping buildServer.json"
+    fi
 
 # Remove generated project, derived data, test results
 clean:
@@ -59,16 +82,9 @@ clean:
 _ensure:
     #!/usr/bin/env bash
     set -euo pipefail
-    # Self-heal a fresh clone/worktree that skipped `just bootstrap` by materializing
-    # the gitignored xcconfigs from templates before Tuist reads them.
-    for cfg in Debug Release; do
-        target="Tuist/Config/${cfg}.xcconfig"
-        template="${target}.template"
-        if [[ ! -f "$target" && -f "$template" ]]; then
-            cp "$template" "$target"
-            echo "✓ materialized $target from template (PLACEHOLDER values)"
-        fi
-    done
+    # Self-heal a fresh clone/worktree that skipped `just bootstrap` by materializing +
+    # backfilling the gitignored xcconfigs from templates before Tuist reads them.
+    just _xcconfig
     if [[ ! -d "{{project}}.xcworkspace" ]]; then
         tuist install
         tuist generate --no-open
@@ -121,6 +137,10 @@ run: _ensure
     app=$(find "{{derived}}/Build/Products/Debug" -maxdepth 1 -name '{{project}}.app' | head -1)
     if [[ -n "$app" ]]; then open "$app"; else echo "build product not found"; exit 1; fi
 
+# Build, then launch the app and assert it survives startup (crash-on-launch guard)
+smoke: build
+    ./scripts/smoke-test.sh
+
 # ─── Test ───────────────────────────────────────────────────────────
 
 # Full unit test suite (macOS)
@@ -162,8 +182,18 @@ format:
 format-check:
     swiftformat --lint .
 
+# Spellcheck source + docs (crate-ci/typos); auto-discovers _typos.toml. Same tool as CI.
+typos:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if ! command -v typos >/dev/null 2>&1; then
+        echo "typos not installed — run 'mise install' (pinned in .mise.toml)" >&2
+        exit 1
+    fi
+    typos
+
 # Run all lint/format checks (the same set CI runs)
-check: format-check lint
+check: format-check lint typos
 
 # ─── Release ────────────────────────────────────────────────────────
 

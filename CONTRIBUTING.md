@@ -22,6 +22,8 @@ just test        # run the test suite
 ## Branch & PR flow
 
 - Branch off **`stage`**; open PRs against `stage`. `main` is release-only.
+- Name branches `<type>/<slug>` matching the commit type, e.g. `feat/inbox-filters`,
+  `fix/menu-flicker`.
 - PRs are **squash-merged**, so the **PR title must be a Conventional Commit**
   (`type(scope): subject`, lowercase subject).
 
@@ -35,9 +37,12 @@ docs refactor test perf style ci build revert`. Breaking changes use `!`
 
 - Keep functions small and typed; add tests for behavior changes.
 - Use `os.Logger` (not `print`), no force-`try`, reference issues in TODOs (`TODO(#123)`).
-- Run `just check` before pushing — CI runs the same set.
+- Run `just check` before pushing — CI runs the same set, **plus** `just build` and
+  `just test`, so run those too before opening a PR.
 
 ## Releases
 
-Merge `stage` → `main` via a promotion PR; `release.yml` reads `marketingVersion` from
-`Project.swift`, tags `vX.Y.Z`, and cuts the GitHub release.
+Run the **cut release** action (Actions tab → pick a bump) — it bumps `Project.swift`,
+creates the milestone, and opens the `stage` → `main` promotion PR. Merging that PR is the
+release: `release.yml` tags `vX.Y.Z`, builds the signed + notarized DMG, uploads it to the
+GitHub release, and updates the Homebrew cask.
