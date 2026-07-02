@@ -15,11 +15,13 @@ than PullBar; a *general* GitHub bar. See `docs/PRODUCT.md` for scope.
 - **macOS app, not iOS.** `MenuBarExtra` + `LSUIElement` agent (no dock icon). Tuist target
   `destinations: [.mac]`, macOS 14, bundle id `dev.lanfermann.gbar`. `just build`/`test` use
   `platform=macOS` (no simulator).
-- **Signing:** ad-hoc (`CODE_SIGN_IDENTITY = -`) so a fresh clone builds without a Developer
-  team. Notarization/Developer ID is deferred backlog.
+- **Signing:** local builds are ad-hoc (`CODE_SIGN_IDENTITY = -`) so a fresh clone builds
+  without a Developer team. Release DMGs are Developer ID-signed + notarized in
+  `release.yml` (gated on secrets, so a self-host fork still gets an ad-hoc DMG).
 
 ## Conventions
 
 Standard Justin Swift/Tuist repo: `just` for all tasks, SwiftFormat+SwiftLint (`just check`),
-Conventional Commits, `stage` working branch / `main` release-only. CI lints only; tests run
-locally. Global setup: `~/.claude/memory/` (profile + projects catalog).
+Conventional Commits, `stage` working branch / `main` release-only. CI (`ci.yml`) runs lint +
+build + launch smoke test + the unit suite (`just test`). Global setup: `~/.claude/memory/`
+(profile + projects catalog).
