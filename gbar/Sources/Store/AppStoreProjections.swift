@@ -12,10 +12,20 @@ extension AppStore {
         return items.filter { $0.account.id == filter }
     }
 
-    /// Notifications scoped to the active account filter.
-    var visibleNotifications: [AccountNotification] {
-        guard let filter = accountFilter else { return notifications }
-        return notifications.filter { $0.account.id == filter }
+    /// Re-derive the cached `prSections`/`issueSections` from `sections` + `accountFilter`. Called
+    /// from the `didSet`s on those inputs, never per view read.
+    func recomputeSectionProjections() {
+        prSections = filteredSections(kind: .prs)
+        issueSections = filteredSections(kind: .issues)
+    }
+
+    /// Re-derive the cached `visibleNotifications` from `notifications` + `accountFilter`.
+    func recomputeNotificationProjection() {
+        guard let filter = accountFilter else {
+            visibleNotifications = notifications
+            return
+        }
+        visibleNotifications = notifications.filter { $0.account.id == filter }
     }
 
     /// Count of actionable PRs — review-requested plus assigned — shown on the menu-bar icon.
@@ -26,17 +36,7 @@ extension AppStore {
         return sections.filter { actionable.contains($0.id) }.reduce(0) { $0 + $1.items.count }
     }
 
-    /// Loaded sections routed to the PRs tab, account-filtered.
-    var prSections: [LoadedSection] {
-        filteredSections(kind: .prs)
-    }
-
-    /// Loaded sections routed to the Issues tab, account-filtered.
-    var issueSections: [LoadedSection] {
-        filteredSections(kind: .issues)
-    }
-
-    private func filteredSections(kind: SearchQuery.Section.Kind) -> [LoadedSection] {
+    func filteredSections(kind: SearchQuery.Section.Kind) -> [LoadedSection] {
         sections
             .filter { $0.kind == kind }
             .map { LoadedSection(id: $0.id, title: $0.title, items: visible($0.items), kind: $0.kind) }

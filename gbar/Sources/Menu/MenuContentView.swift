@@ -519,7 +519,7 @@ extension MenuContentView {
         HStack(spacing: Theme.Spacing.xs) {
             accountBadge(item)
             if item.issue.isPullRequest {
-                PRRowItem(store: store, item: item, checks: store.checks(for: item)) { url in openURL(url) }
+                PRRowItem(store: store, item: item) { url in openURL(url) }
             } else {
                 issueRow(item)
             }

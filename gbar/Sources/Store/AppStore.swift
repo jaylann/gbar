@@ -12,12 +12,27 @@ final class AppStore {
     /// Every connected account. `isSignedIn` is derived from this (plus a not-yet-migrated
     /// legacy token). Metadata is persisted to UserDefaults; tokens live in the Keychain.
     private(set) var accounts: [Account] = []
-    /// Full merged results across all accounts. The account filter is applied in the
-    /// view-facing computed properties, not here, so switching accounts is instant.
-    private(set) var sections: [LoadedSection] = []
+    /// Full merged results across all accounts. The account filter is applied into the cached
+    /// projections below (not on every view read), so switching accounts is instant.
+    private(set) var sections: [LoadedSection] = [] {
+        didSet { recomputeSectionProjections() }
+    }
+
     /// The signed-in users' notification inboxes (`GET /notifications`), tagged by account.
     /// Loaded best-effort alongside sections so a notifications failure never blanks the lists.
-    private(set) var notifications: [AccountNotification] = []
+    private(set) var notifications: [AccountNotification] = [] {
+        didSet { recomputeNotificationProjection() }
+    }
+
+    /// Cached account-filtered projections the menu renders from — the PRs/Issues tab sections and
+    /// the visible notification inbox. Recomputed by the `recompute*` helpers in `AppStoreProjections`
+    /// only when `sections`, `notifications`, or `accountFilter` change, so a view body pass (e.g.
+    /// every search keystroke or incremental CI hydration write) reads them instead of re-filtering
+    /// the whole result set each frame. Written only by those helpers; views read only.
+    var prSections: [LoadedSection] = []
+    var issueSections: [LoadedSection] = []
+    var visibleNotifications: [AccountNotification] = []
+
     /// Best-effort CI status per PR, keyed by `(accountID, prID)`. Kept in a side map (not on
     /// `LoadedSection`) because it's hydrated asynchronously after the initial load and is
     /// decorative — a failure here never blocks the list or surfaces an error. Written only by
@@ -102,6 +117,9 @@ final class AppStore {
             } else {
                 defaults.removeObject(forKey: Self.accountFilterKey)
             }
+            // The filter feeds both projections, so re-derive both when it changes.
+            recomputeSectionProjections()
+            recomputeNotificationProjection()
         }
     }
 
@@ -140,6 +158,12 @@ final class AppStore {
     /// Max concurrent PR-detail+check-runs fetches during CI hydration — this is an N+1 over
     /// the PR list (two requests each), so cap it to stay friendly to GitHub's rate limit.
     static let checksConcurrency = 5
+
+    /// How many hydration completions to accumulate before publishing them to `prChecks`/`prGates`
+    /// in one batched assignment. Each publish invalidates every view reading those maps, so
+    /// batching keeps the post-open wave to a handful of render passes instead of one per PR while
+    /// still revealing CI state progressively.
+    static let checksFlushBatch = 8
 
     /// Persistence backend for all non-secret state (the `didSet` writes above/below).
     /// `.standard` in the app; the test init substitutes an isolated, wiped suite so store
