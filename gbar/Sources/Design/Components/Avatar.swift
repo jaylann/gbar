@@ -112,7 +112,10 @@ final class AvatarImageCache {
 
     private var images: [URL: NSImage] = [:]
     private var order: [URL] = []
-    private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+    /// In-flight fetches, keyed by URL and coalesced. The task yields only `Sendable` `Data` — the
+    /// `NSImage` decode happens back here on the main actor, so a non-`Sendable` `NSImage` never
+    /// crosses an actor boundary (which Swift 6 strict concurrency rejects).
+    private var inFlight: [URL: Task<Data?, Never>] = [:]
     /// URLs whose last load failed — a negative cache so scrolling past a broken avatar doesn't
     /// re-issue the doomed fetch on every row mount. Bounded like `images`.
     private var failedURLs: Set<URL> = []
@@ -132,15 +135,23 @@ final class AvatarImageCache {
     func image(for url: URL) async -> NSImage? {
         if let hit = images[url] { return hit }
         if failedURLs.contains(url) { return nil }
-        if let existing = inFlight[url] { return await existing.value }
-        let task = Task { [weak self] () -> NSImage? in
-            let data = await Self.fetchData(url)
-            let image = data.flatMap { NSImage(data: $0) }
-            self?.finish(image, for: url)
-            return image
+        // Coalesce concurrent callers onto one download; the task returns Sendable Data only.
+        let task: Task<Data?, Never>
+        if let existing = inFlight[url] {
+            task = existing
+        } else {
+            task = Task { await Self.fetchData(url) }
+            inFlight[url] = task
         }
-        inFlight[url] = task
-        return await task.value
+        let data = await task.value
+        // A coalesced caller may have already decoded + cached (or negatively cached) this URL
+        // while we were suspended — reuse that rather than decoding a second time.
+        if let hit = images[url] { return hit }
+        if failedURLs.contains(url) { return nil }
+        // Decode on the main actor so the non-Sendable NSImage never crosses an actor boundary.
+        let image = data.flatMap { NSImage(data: $0) }
+        finish(image, for: url)
+        return image
     }
 
     /// Record a completed load: clear the in-flight entry, then cache the image or mark the URL
