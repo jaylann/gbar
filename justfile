@@ -53,6 +53,7 @@ _xcconfig:
         add_key GBAR_CODE_SIGN_IDENTITY -
         add_key GBAR_DEVELOPMENT_TEAM ""
         add_key GBAR_ENTITLEMENTS gbar/gbar.entitlements
+        add_key GBAR_PROVISIONING_PROFILE_SPECIFIER ""
     done
 
 # Install Tuist deps and regenerate the Xcode project
