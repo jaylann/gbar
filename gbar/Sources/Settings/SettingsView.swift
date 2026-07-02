@@ -72,9 +72,10 @@ struct SettingsView: View {
 /// Makes a window opened from an `LSUIElement` agent app usable. Such a window can
 /// become key (Tab works) but not *main*, so mouse clicks don't move first responder
 /// into a text field. This captures the real hosting `NSWindow`, promotes the app to
-/// `.regular` and forces the window key+main so click-to-focus works, then demotes back
-/// to `.accessory` (no Dock icon) when that window actually closes — a concrete
-/// `willClose` signal rather than a possibly-missed SwiftUI `onDisappear`.
+/// `.regular` and forces the window key+main so click-to-focus works. The reverse — dropping
+/// the Dock icon back to `.accessory` — lives in `StatusItemController`'s
+/// `applicationShouldTerminateAfterLastWindowClosed`, the only spot where the switch actually
+/// takes effect (from here, mid-close and still frontmost, AppKit ignores it).
 private struct WindowActivator: NSViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -106,15 +107,17 @@ private struct WindowActivator: NSViewRepresentable {
             // it's only ever meant to appear on an explicit status-item request.
             window.isRestorable = false
             window.makeKeyAndOrderFront(nil)
-            // Demote back to a no-Dock agent when the window closes. A block-based observer
-            // isn't freed when its `object` deallocates, so unregister it once it has fired.
+            // Re-arm this one-time setup for the next open: clear `didActivate` on close so a
+            // reopen re-runs the key+main promotion (a surviving coordinator would otherwise skip
+            // it). A block-based observer isn't freed when its `object` deallocates, so unregister
+            // it once it fires. The Dock demotion is handled by the app delegate, not here.
             willCloseToken = NotificationCenter.default.addObserver(
                 forName: NSWindow.willCloseNotification,
                 object: window,
                 queue: .main
             ) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    _ = NSApp.setActivationPolicy(.accessory)
+                    self?.didActivate = false
                     self?.removeWillCloseObserver()
                 }
             }

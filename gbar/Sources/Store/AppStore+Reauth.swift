@@ -53,7 +53,7 @@ extension AppStore {
         do {
             let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
             reauthStatus = .awaitingAuthorization(code: code.userCode)
-            if let url = URL(string: code.verificationURI) { openURL(url) }
+            if let url = URL(string: code.verificationUri) { openURL(url) }
             let token = try await client.pollForToken(code)
             // Same Keychain slot => the account's identity is preserved; the device flow itself
             // proves the token works, so no separate validation round-trip is needed.

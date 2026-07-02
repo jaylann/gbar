@@ -308,7 +308,7 @@ struct AccountsPane: View {
             let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
             deviceCode = code.userCode
             status = .working("Waiting for you to authorize in the browser…")
-            if let url = URL(string: code.verificationURI) { openURL(url) }
+            if let url = URL(string: code.verificationUri) { openURL(url) }
             let token = try await client.pollForToken(code)
             try await store.addAccount(token: token, kind: .oauth, apiBaseURL: host)
             status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
@@ -316,6 +316,7 @@ struct AccountsPane: View {
         } catch {
             deviceCode = nil
             status = .failure(AuthErrorCopy.message(for: error))
+            Log.auth.error("device-flow sign-in failed: \(error, privacy: .public)")
         }
     }
 

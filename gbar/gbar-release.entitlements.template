@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Team-signed (Developer ID / paid) release: keep the App Sandbox, and grant a
+	     keychain-access-group so Keychain works under it. `scripts/make-dmg.sh` materializes
+	     the sibling gbar-release.entitlements from this template, substituting __TEAM__ with
+	     GBAR_DEVELOPMENT_TEAM. A literal team-prefixed group is valid under Developer ID
+	     *Manual* signing with no provisioning profile (verified). Teamless/ad-hoc builds can't
+	     carry a team group and use the non-sandboxed gbar.entitlements instead. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<key>com.apple.security.network.client</key>
+	<true/>
+	<key>keychain-access-groups</key>
+	<array>
+		<string>__TEAM__.dev.lanfermann.gbar</string>
+	</array>
+</dict>
+</plist>
