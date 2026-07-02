@@ -183,6 +183,9 @@ final class AppStoreTests: XCTestCase {
         try await store.merge(item(SearchIssue.stub(id: 1, number: 42)), method: .merge)
 
         XCTAssertTrue(store.sessionExpired)
+        // Regression: quick-action 401s must record WHICH account expired, like the refresh
+        // path does, so the popover can offer an in-place "Reconnect <login>".
+        XCTAssertEqual(store.expiredAccountID, "octocat")
         XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
     }
 
@@ -194,6 +197,7 @@ final class AppStoreTests: XCTestCase {
         try await store.approve(item(SearchIssue.stub(id: 1, number: 42)))
 
         XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.expiredAccountID, "octocat")
         XCTAssertEqual(store.lastErrorMessage, "Session expired — reconnect in Settings.")
     }
 

@@ -576,6 +576,14 @@ extension AppStore {
         }
     }
 
+    /// Flag one account's session as expired — used by quick actions on a 401 so the reconnect
+    /// prompt can offer a per-account "Reconnect <login>", matching the refresh path. Lives here
+    /// because `expiredAccountID` has a `private(set)` setter scoped to this file.
+    func markSessionExpired(accountID: Account.ID) {
+        sessionExpired = true
+        expiredAccountID = accountID
+    }
+
     /// Mark a notification thread read on the server (using its own account's token), then
     /// drop it from the local inbox once the call succeeds (pessimistic). On failure the item
     /// stays put and the error surfaces via `lastErrorMessage`.
