@@ -8,8 +8,8 @@ let bundleId = "dev.lanfermann.gbar"
 let deploymentTarget: DeploymentTargets = .macOS("14.0")
 
 // source of truth for release.yml — the release workflow greps these two lines.
-let marketingVersion = "0.2.2"
-let buildNumber = "4"
+let marketingVersion = "0.2.4"
+let buildNumber = "6"
 
 let baseSettings: SettingsDictionary = [
     "SWIFT_VERSION": "6.0",
@@ -42,6 +42,11 @@ let signingSettings: SettingsDictionary = [
     // keychain, no prompt). Requiring the group on an ad-hoc build would fail with
     // "requires a provisioning profile", so it must be swappable per environment.
     "CODE_SIGN_ENTITLEMENTS": "$(GBAR_ENTITLEMENTS)",
+    // Developer ID release only: a real Developer ID provisioning profile must validate the
+    // application-identifier + keychain-access-groups entitlements — on macOS an unvalidated
+    // group under the App Sandbox makes launchd refuse to spawn the app ("Launchd job spawn
+    // failed"). Empty (no-op) for teamless/ad-hoc and Automatic dev signing.
+    "PROVISIONING_PROFILE_SPECIFIER": "$(GBAR_PROVISIONING_PROFILE_SPECIFIER)",
     // Icon Composer (.icon) app icon — gbar/Resources/gbar.icon, compiled by actool.
     // Must be target-level: Tuist injects a target-level default of "AppIcon" that
     // outranks any project-`base` value (same precedence issue as CODE_SIGN_IDENTITY).
