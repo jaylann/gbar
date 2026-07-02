@@ -115,42 +115,91 @@ extension AppStore {
         return Task { [weak self] in
             // Resolve per-repo merge info first so each PR's gate knows it up front.
             await self?.hydrateRepoPermissions(prs: prs, generation: generation)
-            let mergeInfoByKey = await self?.mergePermissions(for: prs) ?? [:]
-            await withTaskGroup(of: (PRCheckKey, PRState).self) { group in
-                var next = 0
-                func schedule() {
-                    guard next < prs.count else { return }
-                    let pr = prs[next]
-                    next += 1
-                    let mergeInfo = mergeInfoByKey[pr.key]
-                    group.addTask {
-                        await (
-                            pr.key,
-                            Self.fetchPRState(for: pr.issue, login: pr.login, mergeInfo: mergeInfo, using: pr.api)
-                        )
-                    }
-                }
-                for _ in 0..<Self.checksConcurrency {
-                    schedule()
-                }
-                while let (key, state) = await group.next() {
-                    guard let self, self.checksGeneration == generation else { continue }
-                    self.prGates[key] = state.gate
-                    if let checks = state.checks {
-                        // A real observation: diff for a pass/fail banner, then store the result.
-                        if let issue = issueByKey[key] {
-                            self.notifyCheckStatusChange(key: key, pr: issue, newStatus: checks.status)
-                        }
-                        self.prChecks[key] = checks
-                    } else {
-                        // No checks or a failed fetch: clear the decorative dot so a stale green
-                        // can't survive, but leave `lastCheckStatus` untouched — wiping it would
-                        // let a transient error swallow the next real pass→fail transition (bug #3).
-                        self.prChecks[key] = nil
-                    }
-                    schedule()
+            let mergeInfoByKey = self?.mergePermissions(for: prs) ?? [:]
+            await self?.drainChecks(
+                prs: prs, mergeInfoByKey: mergeInfoByKey, issueByKey: issueByKey, generation: generation
+            )
+        }
+    }
+
+    /// Run the capped-concurrency detail+check-runs fetch for `prs`, folding each result into
+    /// working copies of the hydration maps and publishing them in batches. The fetches run
+    /// off-actor; the folds and whole-map publishes happen here on the main actor.
+    ///
+    /// Publishing in batches is deliberate: every write to `prChecks`/`prGates` invalidates every
+    /// view that reads them, so writing 50 PRs one at a time triggers 50 render passes during the
+    /// post-open wave — the dominant menu jank. Reassigning the whole map once per batch collapses
+    /// each batch into a single invalidation while still revealing CI state progressively.
+    private func drainChecks(
+        prs: [PRFetch],
+        mergeInfoByKey: [PRCheckKey: RepoMergeInfo],
+        issueByKey: [PRCheckKey: SearchIssue],
+        generation: Int
+    ) async {
+        await withTaskGroup(of: (PRCheckKey, PRState).self) { group in
+            var next = 0
+            func schedule() {
+                guard next < prs.count else { return }
+                let pr = prs[next]
+                next += 1
+                let mergeInfo = mergeInfoByKey[pr.key]
+                group.addTask {
+                    await (
+                        pr.key,
+                        Self.fetchPRState(for: pr.issue, login: pr.login, mergeInfo: mergeInfo, using: pr.api)
+                    )
                 }
             }
+            for _ in 0..<Self.checksConcurrency {
+                schedule()
+            }
+            // Seed from the (already pruned) live maps so absent keys stay absent.
+            var pendingChecks = prChecks
+            var pendingGates = prGates
+            var sinceFlush = 0
+            while let (key, state) = await group.next() {
+                guard checksGeneration == generation else { continue }
+                fold(key: key, state: state, issueByKey: issueByKey, checks: &pendingChecks, gates: &pendingGates)
+                sinceFlush += 1
+                if sinceFlush >= Self.checksFlushBatch {
+                    publishChecks(pendingChecks, gates: pendingGates, generation: generation)
+                    sinceFlush = 0
+                }
+                schedule()
+            }
+            if sinceFlush > 0 {
+                publishChecks(pendingChecks, gates: pendingGates, generation: generation)
+            }
         }
+    }
+
+    /// Fold one completed PR's resolved state into the pending hydration maps, firing a pass/fail
+    /// banner on a real check observation. A `nil` checks result clears the decorative dot but
+    /// leaves `lastCheckStatus` untouched, so a transient fetch error can't swallow the next real
+    /// pass→fail transition (bug #3).
+    private func fold(
+        key: PRCheckKey,
+        state: PRState,
+        issueByKey: [PRCheckKey: SearchIssue],
+        checks: inout [PRCheckKey: PRChecks],
+        gates: inout [PRCheckKey: PRGate]
+    ) {
+        gates[key] = state.gate
+        if let resolved = state.checks {
+            if let issue = issueByKey[key] {
+                notifyCheckStatusChange(key: key, pr: issue, newStatus: resolved.status)
+            }
+            checks[key] = resolved
+        } else {
+            checks[key] = nil
+        }
+    }
+
+    /// Publish a hydration batch as single whole-map assignments (one view invalidation each),
+    /// unless a newer wave has superseded this one.
+    private func publishChecks(_ checks: [PRCheckKey: PRChecks], gates: [PRCheckKey: PRGate], generation: Int) {
+        guard checksGeneration == generation else { return }
+        prGates = gates
+        prChecks = checks
     }
 }

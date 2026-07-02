@@ -94,6 +94,49 @@ final class NotificationDiffTests: XCTestCase {
         )
     }
 
+    // MARK: - Recency gate
+
+    func testIsRecentlyActiveTrueForItemUpdatedWithinWindow() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let issue = SearchIssue.stub(id: 1, updatedAt: now.addingTimeInterval(-3600)) // 1h ago
+        XCTAssertTrue(NotificationDiff.isRecentlyActive(issue, now: now, window: 24 * 60 * 60))
+    }
+
+    func testIsRecentlyActiveFalseForStaleItem() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let issue = SearchIssue.stub(id: 1, updatedAt: now.addingTimeInterval(-48 * 3600)) // 2 days ago
+        XCTAssertFalse(NotificationDiff.isRecentlyActive(issue, now: now, window: 24 * 60 * 60))
+    }
+
+    func testIsRecentlyActiveTreatsBoundaryAsInclusive() {
+        let now = Date(timeIntervalSince1970: 1_000_000)
+        let issue = SearchIssue.stub(id: 1, updatedAt: now.addingTimeInterval(-24 * 60 * 60)) // exactly at edge
+        XCTAssertTrue(NotificationDiff.isRecentlyActive(issue, now: now, window: 24 * 60 * 60))
+    }
+
+    func testIsRecentlyActiveFallsBackToCreatedAtWhenUpdatedAtMissing() throws {
+        // Payload without `updated_at`: the gate must fall back to `created_at`.
+        let json = """
+        {
+          "id": 1, "number": 1, "title": "x",
+          "html_url": "https://github.com/octo/repo/pull/1",
+          "state": "open", "created_at": "2026-01-01T00:00:00Z",
+          "user": { "login": "jaylann", "avatar_url": null },
+          "repository_url": "https://api.github.com/repos/octo/repo",
+          "pull_request": { "html_url": "https://github.com/octo/repo/pull/1", "merged_at": null },
+          "draft": false
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let issue = try decoder.decode(SearchIssue.self, from: Data(json.utf8))
+        let created = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-01-01T00:00:00Z"))
+
+        XCTAssertNil(issue.updatedAt)
+        XCTAssertTrue(NotificationDiff.isRecentlyActive(issue, now: created.addingTimeInterval(60), window: 3600))
+        XCTAssertFalse(NotificationDiff.isRecentlyActive(issue, now: created.addingTimeInterval(7200), window: 3600))
+    }
+
     // MARK: - CI status
 
     func testCheckStatusChangedNotifiesOnPendingToSuccess() {

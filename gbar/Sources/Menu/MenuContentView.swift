@@ -32,7 +32,8 @@ struct MenuContentView: View {
     /// in an `NSPopover` (outside the SwiftUI scene graph), where `\.openSettings` isn't wired.
     let openSettings: () -> Void
     @Environment(\.openURL) private var openURL
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// Non-private so the animation helpers in `MenuAnimations.swift` can read it.
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
 
     @AppStorage("gbar.menu.selectedTab") private var selectedTabRaw = MenuTab.prs.rawValue
     @State private var searchText = ""
@@ -44,6 +45,10 @@ struct MenuContentView: View {
     @State var starredOnly = false
     @State var inboxReason: InboxReason = .all
     @FocusState private var searchFocused: Bool
+    /// Direction the last tab switch travelled, so the content transition slides the incoming
+    /// tab in from the correct side. Set in `tabSelection`'s setter (see `animatedTabContent`
+    /// in `MenuAnimations.swift`). Non-private so that extension can read it.
+    @State var tabForward = true
 
     var selectedTab: MenuTab {
         MenuTab(rawValue: selectedTabRaw) ?? .prs
@@ -52,7 +57,16 @@ struct MenuContentView: View {
     private var tabSelection: Binding<MenuTab> {
         Binding(
             get: { MenuTab(rawValue: selectedTabRaw) ?? .prs },
-            set: { selectedTabRaw = $0.rawValue }
+            // Record travel direction *before* the write so the content transition (driven off
+            // `selectedTab` in `animatedTabContent`) reads the right side. The `@AppStorage`
+            // re-render lands after this `@State` write settles, so `tabForward` is ready.
+            set: { newTab in
+                let all = MenuTab.allCases
+                if let old = all.firstIndex(of: selectedTab), let new = all.firstIndex(of: newTab) {
+                    tabForward = new >= old
+                }
+                selectedTabRaw = newTab.rawValue
+            }
         )
     }
 
@@ -67,11 +81,13 @@ struct MenuContentView: View {
                         searchRow
                     }
                     if showsFilters {
+                        // Cross-fade the tab-specific chips when the tab changes (the chips
+                        // themselves carry `.transition(.opacity)`), so they don't pop in.
                         chipsRow
+                            .animation(Motion.respecting(reduceMotion, Motion.spring), value: selectedTab)
                     }
                     Divider()
-                    tabContent
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    animatedTabContent
                 } else {
                     SignInPromptView { openSettingsWindow() }
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -222,8 +238,9 @@ struct MenuContentView: View {
 
     // MARK: Per-tab content
 
+    /// Non-private so `animatedTabContent` (MenuAnimations.swift) can wrap it in the tab transition.
     @ViewBuilder
-    private var tabContent: some View {
+    var tabContent: some View {
         // The Actions/Releases tabs load on their own (repo-feeds) wave — keep their skeleton up
         // until that wave finishes, independent of the section/inbox first load.
         let repoFeedTab = selectedTab == .actions || selectedTab == .releases
@@ -332,7 +349,17 @@ struct MenuContentView: View {
                     errorBanner(message)
                 }
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    // Eager (not `LazyVStack`): the rows are variable-height (an expanded PR adds
+                    // its `CheckRow` detail; per-row CI hydration toggles the disclosure gutter),
+                    // and a `LazyVStack` over-reserves space for such rows on macOS — leaving empty
+                    // gaps that appear/disappear as scrolling forces re-measurement. Eager layout
+                    // measures every row exactly, so the geometry is always right, and since rows
+                    // are never recycled mid-scroll, scrolling stays allocation-free (no per-frame
+                    // row realization or avatar re-decode). The lists are bounded (a height-capped,
+                    // intermittently-opened popover), so realizing them up front is cheap. Kept
+                    // deliberately free of any ambient `.animation`/row `.transition`: a filter
+                    // toggle animates the diff via `withAnimation` at the chip (see MenuFilters).
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                         content()
                     }
                     // A small inset so rows (and the PR disclosure chevron, which sits left of
@@ -498,7 +525,7 @@ extension MenuContentView {
         HStack(spacing: Theme.Spacing.xs) {
             accountBadge(item)
             if item.issue.isPullRequest {
-                PRRowItem(store: store, item: item, checks: store.checks(for: item)) { url in openURL(url) }
+                PRRowItem(store: store, item: item) { url in openURL(url) }
             } else {
                 issueRow(item)
             }

@@ -40,6 +40,10 @@ struct SearchIssue: Decodable, Identifiable {
     let htmlURL: String
     let state: String
     let createdAt: Date
+    /// Last-activity timestamp — the recency signal the notification path uses to avoid banners
+    /// for stale items. Optional so a payload missing it degrades to `createdAt` rather than
+    /// failing to decode.
+    let updatedAt: Date?
     let user: GitHubUser?
     let repositoryURL: String
     let pullRequest: PullRequestRef?
@@ -52,6 +56,7 @@ struct SearchIssue: Decodable, Identifiable {
         case htmlURL = "html_url"
         case state
         case createdAt = "created_at"
+        case updatedAt = "updated_at"
         case user
         case repositoryURL = "repository_url"
         case pullRequest = "pull_request"

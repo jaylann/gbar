@@ -93,6 +93,31 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(first.title, "Fix the thing")
     }
 
+    func testSearchIssuesRequestSortsByUpdatedDescending() async throws {
+        let box = HeaderBox()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            box.path = url.absoluteString
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            return (response, Data(#"{"total_count":0,"items":[]}"#.utf8))
+        }
+
+        let client = try makeClient()
+        _ = try await client.searchIssues("is:open is:pr author:@me")
+
+        let urlString = try XCTUnwrap(box.path)
+        let components = try XCTUnwrap(URLComponents(string: urlString))
+        let items = try XCTUnwrap(components.queryItems)
+        // Sorting by recency keeps the capped fetch window deterministic across polls, so dormant
+        // items can't churn in/out and re-fire notifications.
+        XCTAssertEqual(items.first { $0.name == "sort" }?.value, "updated")
+        XCTAssertEqual(items.first { $0.name == "order" }?.value, "desc")
+        XCTAssertEqual(items.first { $0.name == "per_page" }?.value, "50")
+        XCTAssertEqual(items.first { $0.name == "q" }?.value, "is:open is:pr author:@me")
+    }
+
     func testCheckRunsDecodesEnvelope() async throws {
         let pathBox = HeaderBox()
         MockURLProtocol.handler = { request in

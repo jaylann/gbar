@@ -27,8 +27,26 @@ final class GitHubModelsDecodingTests: XCTestCase {
 
         XCTAssertNil(issue.user)
         XCTAssertNil(issue.draft)
+        XCTAssertNil(issue.updatedAt) // absent in payload → nil, gates fall back to createdAt
         XCTAssertFalse(issue.isPullRequest)
         XCTAssertEqual(issue.repositorySlug, "octo/repo")
+    }
+
+    func testSearchIssueDecodesUpdatedAt() throws {
+        let issue = try decode(SearchIssue.self, """
+        {
+          "id": 8,
+          "number": 13,
+          "title": "Recently touched",
+          "html_url": "https://github.com/octo/repo/pull/13",
+          "state": "open",
+          "created_at": "2026-01-01T00:00:00Z",
+          "updated_at": "2026-06-15T12:00:00Z",
+          "repository_url": "https://api.github.com/repos/octo/repo"
+        }
+        """)
+
+        XCTAssertEqual(issue.updatedAt, ISO8601DateFormatter().date(from: "2026-06-15T12:00:00Z"))
     }
 
     func testPullRequestDetailDecodesFullPayload() throws {

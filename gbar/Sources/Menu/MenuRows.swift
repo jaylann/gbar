@@ -6,8 +6,14 @@ import SwiftUI
 struct PRRowItem: View {
     let store: AppStore
     let item: AccountItem
-    let checks: PRChecks?
     var openURL: (URL) -> Void
+
+    /// The hydrated CI status/detail for this PR. Read here (not passed in from the parent list)
+    /// so an incremental `prChecks` write during hydration invalidates only this leaf row, not the
+    /// whole `MenuContentView.body`.
+    private var checks: PRChecks? {
+        store.checks(for: item)
+    }
 
     /// Which inline action the row is currently morphed into. Merge and Approve both replace the
     /// row's middle region rather than popping a modal, matching the app's slide-in motion.
