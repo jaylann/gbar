@@ -28,7 +28,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -91,7 +91,7 @@ jobs:
       HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
       HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
