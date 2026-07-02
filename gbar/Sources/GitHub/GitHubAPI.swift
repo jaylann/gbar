@@ -82,6 +82,12 @@ struct GitHubClient: GitHubAPI {
             path: "search/issues",
             queryItems: [
                 URLQueryItem(name: "q", value: query),
+                // Sort by recency (not GitHub's default unstable `best-match`) so the fetched
+                // window is deterministic across polls: with more matches than `per_page`, an
+                // unsorted query returns a shifting subset, making dormant items churn in/out
+                // and re-fire "new item" notifications. Newest-updated first also reads best.
+                URLQueryItem(name: "sort", value: "updated"),
+                URLQueryItem(name: "order", value: "desc"),
                 URLQueryItem(name: "per_page", value: "50"),
             ]
         )

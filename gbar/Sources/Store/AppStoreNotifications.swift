@@ -81,7 +81,10 @@ extension AppStore {
         seededSectionKeys = newSeeded
 
         guard notificationsEnabled, notifySections else { return }
-        for item in candidates {
+        // Recency backstop: never banner a stale item that merely churned into the fetched window.
+        // Baseline advancement above already ran, so a suppressed item stays tracked and silent.
+        let now = Date()
+        for item in candidates where NotificationDiff.isRecentlyActive(item.issue, now: now) {
             let issue = item.issue
             notifier?.post(
                 title: issue.isPullRequest ? "New pull request" : "New issue",

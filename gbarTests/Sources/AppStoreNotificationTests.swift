@@ -81,6 +81,29 @@ final class AppStoreNotificationTests: XCTestCase {
         XCTAssertTrue(spy.posts[0].body.contains("#2"))
     }
 
+    /// A dormant item that was absent last poll and churns back into the capped/eventually-
+    /// consistent search window must NOT re-fire a banner — the recency gate suppresses anything
+    /// last active beyond the window even though the baseline diff considers it "unseen".
+    func testStaleSectionItemChurningInDoesNotNotify() async throws {
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 1, number: 1)]
+        let store = try makeStore(api: seed)
+        let spy = SpyNotifier()
+        store.notifier = spy
+        await store.refresh() // seed (item 1 only)
+
+        // Item 99 appears now but was last updated ~9 months ago (like a long-forgotten open PR).
+        var next = FakeGitHubAPI()
+        next.defaultResult = [
+            SearchIssue.stub(id: 1, number: 1),
+            SearchIssue.stub(id: 99, number: 99, updatedAt: Date(timeIntervalSinceNow: -270 * 24 * 60 * 60)),
+        ]
+        store.makeAPI = { [next] _, _ in next }
+        await store.refresh()
+
+        XCTAssertTrue(spy.posts.isEmpty, "a months-old item must not banner even when newly in-window")
+    }
+
     func testSectionToggleOffSuppressesNotification() async throws {
         var seed = FakeGitHubAPI()
         seed.defaultResult = [SearchIssue.stub(id: 1, number: 1)]
