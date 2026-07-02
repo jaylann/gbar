@@ -350,6 +350,7 @@ private struct ApproveComposer: View {
 struct ActionRunRowItem: View {
     let item: AccountActionRun
     let showAccountBadge: Bool
+    var isStarred = false
     var openURL: (URL) -> Void
 
     var body: some View {
@@ -361,7 +362,7 @@ struct ActionRunRowItem: View {
             Button {
                 if let url = URL(string: item.run.htmlURL) { openURL(url) }
             } label: {
-                HoverRow { ActionRunRow(model: ActionRunRow.Model(item)) }
+                HoverRow { ActionRunRow(model: ActionRunRow.Model(item, isStarred: isStarred)) }
             }
             .buttonStyle(.plain)
         }
@@ -372,6 +373,7 @@ struct ActionRunRowItem: View {
 struct ReleaseRowItem: View {
     let item: AccountRelease
     let showAccountBadge: Bool
+    var isStarred = false
     var openURL: (URL) -> Void
 
     var body: some View {
@@ -383,7 +385,7 @@ struct ReleaseRowItem: View {
             Button {
                 if let url = URL(string: item.release.htmlURL) { openURL(url) }
             } label: {
-                HoverRow { ReleaseRow(model: ReleaseRow.Model(item)) }
+                HoverRow { ReleaseRow(model: ReleaseRow.Model(item, isStarred: isStarred)) }
             }
             .buttonStyle(.plain)
         }

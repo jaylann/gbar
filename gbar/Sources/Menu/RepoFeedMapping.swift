@@ -4,7 +4,7 @@ import Foundation
 /// to their design-system row models, keeping the display vocabulary in one place — mirrors
 /// `NotificationMapping`.
 extension ActionRunRow.Model {
-    init(_ item: AccountActionRun) {
+    init(_ item: AccountActionRun, isStarred: Bool = false) {
         let run = item.run
         let title = run.displayTitle.flatMap { $0.isEmpty ? nil : $0 } ?? run.name
         self.init(
@@ -16,7 +16,8 @@ extension ActionRunRow.Model {
             event: Self.humanizedEvent(run.event),
             status: run.ciStatus,
             date: run.updatedAt,
-            duration: run.durationText
+            duration: run.durationText,
+            isStarred: isStarred
         )
     }
 
@@ -33,7 +34,7 @@ extension ActionRunRow.Model {
 }
 
 extension ReleaseRow.Model {
-    init(_ item: AccountRelease) {
+    init(_ item: AccountRelease, isStarred: Bool = false) {
         let release = item.release
         let title = release.name.flatMap { $0.isEmpty ? nil : $0 } ?? release.tagName
         self.init(
@@ -42,7 +43,8 @@ extension ReleaseRow.Model {
             title: title,
             tag: release.tagName,
             date: release.sortDate,
-            isPrerelease: release.prerelease
+            isPrerelease: release.prerelease,
+            isStarred: isStarred
         )
     }
 }

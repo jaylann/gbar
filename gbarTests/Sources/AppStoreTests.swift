@@ -792,6 +792,9 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(AppStore.normalizedSlug("a/b/c"))
         XCTAssertNil(AppStore.normalizedSlug("/repo"))
         XCTAssertNil(AppStore.normalizedSlug("owner/"))
+        // Interior whitespace is a typo, not a repo path.
+        XCTAssertNil(AppStore.normalizedSlug("own er/repo"))
+        XCTAssertNil(AppStore.normalizedSlug("owner/ "))
     }
 
     // MARK: - Repo feeds hydration

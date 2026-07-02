@@ -591,7 +591,9 @@ extension MenuContentView {
             )
         } content: {
             ForEach(items) { item in
-                ActionRunRowItem(item: item, showAccountBadge: showsAccountBadges) { openURL($0) }
+                ActionRunRowItem(item: item, showAccountBadge: showsAccountBadges, isStarred: store.isStarred(item)) {
+                    openURL($0)
+                }
             }
         }
     }
@@ -604,7 +606,9 @@ extension MenuContentView {
             repoFeedEmptyState(caughtUpTitle: "No releases yet", caughtUpMessage: "No releases in your watched repos.")
         } content: {
             ForEach(items) { item in
-                ReleaseRowItem(item: item, showAccountBadge: showsAccountBadges) { openURL($0) }
+                ReleaseRowItem(item: item, showAccountBadge: showsAccountBadges, isStarred: store.isStarred(item)) {
+                    openURL($0)
+                }
             }
         }
     }

@@ -12,6 +12,7 @@ struct ReleaseRow: View {
         let tag: String
         let date: Date
         var isPrerelease = false
+        var isStarred = false
     }
 
     let model: Model
@@ -46,6 +47,7 @@ struct ReleaseRow: View {
 
     private var metaLine: some View {
         HStack(spacing: Theme.Spacing.xs) {
+            StarMarker(isStarred: model.isStarred)
             Text(model.repo).font(Theme.Typography.mono)
             Text("· \(model.tag)")
                 .font(Theme.Typography.mono)

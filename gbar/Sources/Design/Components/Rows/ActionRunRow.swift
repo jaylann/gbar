@@ -18,6 +18,7 @@ struct ActionRunRow: View {
         let status: CIStatus
         let date: Date
         var duration: String?
+        var isStarred = false
     }
 
     let model: Model
@@ -47,6 +48,7 @@ struct ActionRunRow: View {
 
     private var metaLine: some View {
         HStack(spacing: Theme.Spacing.xs) {
+            StarMarker(isStarred: model.isStarred)
             Text(model.repo)
             Text(model.workflow)
             if let branch = model.branch {

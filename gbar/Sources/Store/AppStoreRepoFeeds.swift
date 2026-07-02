@@ -111,6 +111,9 @@ extension AppStore {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         let parts = trimmed.split(separator: "/", omittingEmptySubsequences: false)
         guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        // Reject interior whitespace — a stray space means a typo, not a repo path, and would
+        // only produce a wasted best-effort 404.
+        guard !parts.contains(where: { $0.contains(where: \.isWhitespace) }) else { return nil }
         return trimmed
     }
 
