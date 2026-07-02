@@ -33,11 +33,24 @@ extension AppStore {
             classify(error, expired: &sessionExpired, message: &errorMessage, fallback: nil)
             logFailure("notifications", account: account, error: error)
         }
+        // Starred is a decorative cross-tab signal — a failure here must never surface an error
+        // message (it's not a section the user asked for), only skip advancing the set.
+        var starred: [String] = []
+        var starredSucceeded = false
+        do {
+            starred = try await api.starredRepos()
+            starredSucceeded = true
+        } catch {
+            if case .http(401) = error as? GitHubClient.ClientError { sessionExpired = true }
+            logFailure("starred", account: account, error: error)
+        }
         return AccountLoad(
             account: account,
             sections: sections,
             notifications: notifications,
             notificationsSucceeded: notificationsSucceeded,
+            starred: starred,
+            starredSucceeded: starredSucceeded,
             sessionExpired: sessionExpired,
             errorMessage: errorMessage
         )

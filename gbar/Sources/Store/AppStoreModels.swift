@@ -32,6 +32,30 @@ struct PRCheckKey: Hashable {
     let prID: Int
 }
 
+/// One Actions workflow run tagged with the account it was fetched under and its repo slug,
+/// so the merged list shows provenance and account-scoped filtering works.
+struct AccountActionRun: Identifiable {
+    let account: Account
+    let repo: String
+    let run: WorkflowRun
+
+    /// Composite of account id + repo + run id — run ids are per-host, so scope them.
+    var id: String {
+        "\(account.id)#\(repo)#\(run.id)"
+    }
+}
+
+/// One release tagged with the account it was fetched under and its repo slug.
+struct AccountRelease: Identifiable {
+    let account: Account
+    let repo: String
+    let release: Release
+
+    var id: String {
+        "\(account.id)#\(repo)#\(release.id)"
+    }
+}
+
 /// A default/saved query resolved to its current results, aggregated across accounts.
 struct LoadedSection: Identifiable {
     let id: String
@@ -86,6 +110,13 @@ struct AccountLoad {
     /// (and seeds) the inbox baseline only for accounts that loaded, so a transient inbox
     /// failure can't drop threads from the baseline and re-fire them as "new" on recovery.
     var notificationsSucceeded: Bool
+    /// The `owner/name` slugs this account has starred. Best-effort like `notifications`; a
+    /// failed fetch leaves the previous set in place (see `starredSucceeded`).
+    var starred: [String]
+    /// Whether the `/user/starred` fetch succeeded this poll. A transient failure must not wipe
+    /// the account's starred set (which would drop the star marks / Starred filter until the
+    /// next good poll), so the merge keeps the prior set when this is false.
+    var starredSucceeded: Bool
     var sessionExpired: Bool
     var errorMessage: String?
 }

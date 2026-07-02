@@ -25,13 +25,17 @@ but aims broader — a *general* GitHub bar, not a PR-only viewer.
 - **Desktop notifications:** new PRs, review requests assigned to you, status changes.
 - **Multiple accounts / orgs** and **GitHub Enterprise** (custom API base URL).
 - **Custom saved queries:** arbitrary GitHub search strings become menu sections.
+- **Starred signal:** a star marker on any PR/issue/inbox row whose repo you've starred,
+  plus a cross-tab "Starred" filter (read-only; sourced from `/user/starred`).
+- **Watchlist → Actions & Releases:** a curated set of `owner/name` repos (Settings ▸
+  Watchlist) feeds two tabs — GitHub Actions workflow runs (incl. non-PR / scheduled /
+  manual runs) and a "what shipped" releases digest. The watchlist is the *only* scope for
+  these per-repo surfaces, keeping the request fan-out bounded.
 - Configurable poll interval; menu-bar badge with counts.
 
 ### Backlog (post-v1)
 Keeps the "general GitHub bar" promise:
-- Full **notifications inbox** (the `/notifications` feed).
-- **Releases**, **GitHub Actions** workflow-run status, starred/watched repos,
-  discussions, gists.
+- **Discussions**, **gists**.
 - **Real-time** updates via a hosted webhook backend (the paid convenience tier), instead
   of polling.
 

@@ -724,6 +724,164 @@ final class AppStoreTests: XCTestCase {
 
         XCTAssertEqual(store.accounts.map(\.login), ["legacyuser"])
     }
+
+    // MARK: - Starred signal
+
+    func testRefreshMergesStarredAndIsStarredIsCaseInsensitive() async throws {
+        var fake = FakeGitHubAPI()
+        // GitHub preserves owner/name casing; membership must be case-insensitive.
+        fake.starredResult = ["Octo/Repo"]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        let starred = try item(SearchIssue.stub(id: 1)) // repositorySlug == "octo/repo"
+        XCTAssertTrue(store.isStarred(starred))
+        // A repo the account hasn't starred isn't marked.
+        let notStarred = try AccountItem(account: makeAccount(), issue: SearchIssue.stub(id: 2, repo: "other/repo"))
+        XCTAssertFalse(store.isStarred(notStarred))
+    }
+
+    func testStarredFetchFailureKeepsPriorSet() async throws {
+        var fake = FakeGitHubAPI()
+        fake.starredResult = ["octo/repo"]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+        XCTAssertTrue(try store.isStarred(item(SearchIssue.stub(id: 1))))
+
+        // A later poll where only the starred fetch fails must not wipe the set (and must not
+        // surface an error message — starred isn't a section the user asked for).
+        struct Boom: Error {}
+        var flaky = FakeGitHubAPI()
+        flaky.starredError = Boom()
+        store.makeAPI = { [flaky] _, _ in flaky }
+        await store.refresh(force: true)
+
+        XCTAssertTrue(try store.isStarred(item(SearchIssue.stub(id: 1))))
+        XCTAssertNil(store.lastErrorMessage)
+        XCTAssertFalse(store.sessionExpired)
+    }
+
+    // MARK: - Watchlist / repo set
+
+    func testWatchedRepoRefsFromWatchlistDedupsAndSkipsBlank() throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+        store.watchlist = ["  octo/repo  ", "octo/repo", "malformed", "", "owner/name"]
+        let account = try makeAccount()
+        let refs = store.watchedRepoRefs(apis: [account.id: fake])
+
+        // Trimmed + deduped ("octo/repo" once), blank/malformed skipped.
+        XCTAssertEqual(refs.map(\.slug), ["octo/repo", "owner/name"])
+        XCTAssertTrue(refs.allSatisfy { $0.account.id == account.id })
+    }
+
+    func testWatchedRepoRefsCapsTotalFanOut() throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+        store.watchlist = (0..<(AppStore.reposScanCap + 10)).map { "octo/repo\($0)" }
+        let account = try makeAccount()
+        let refs = store.watchedRepoRefs(apis: [account.id: fake])
+        XCTAssertEqual(refs.count, AppStore.reposScanCap)
+    }
+
+    func testNormalizedSlugValidation() {
+        XCTAssertEqual(AppStore.normalizedSlug("  octo/repo "), "octo/repo")
+        XCTAssertNil(AppStore.normalizedSlug(""))
+        XCTAssertNil(AppStore.normalizedSlug("noslash"))
+        XCTAssertNil(AppStore.normalizedSlug("a/b/c"))
+        XCTAssertNil(AppStore.normalizedSlug("/repo"))
+        XCTAssertNil(AppStore.normalizedSlug("owner/"))
+    }
+
+    // MARK: - Repo feeds hydration
+
+    func testHydrateRepoFeedsPopulatesAndSortsNewestFirst() async throws {
+        var fake = FakeGitHubAPI()
+        fake.workflowRunsResult = [
+            .stub(id: 1, updatedAt: "2026-01-01T00:00:00Z"),
+            .stub(id: 2, updatedAt: "2026-01-02T00:00:00Z"),
+        ]
+        fake.releasesResult = [
+            .stub(id: 10, tagName: "v1.0.0", publishedAt: "2026-01-01T00:00:00Z"),
+            .stub(id: 11, tagName: "v1.1.0", publishedAt: "2026-01-03T00:00:00Z"),
+        ]
+        let store = try makeStore(api: fake)
+        store.watchlist = ["octo/repo"]
+
+        await store.refresh()
+        await store.awaitRepoFeedsHydration()
+
+        XCTAssertTrue(store.hasLoadedRepoFeeds)
+        XCTAssertEqual(store.actionRuns.map(\.run.id), [2, 1]) // newest first
+        XCTAssertEqual(store.releases.map(\.release.id), [11, 10])
+        XCTAssertTrue(store.actionRuns.allSatisfy { $0.repo == "octo/repo" })
+    }
+
+    func testHydrateRepoFeedsDropsDraftReleases() async throws {
+        var fake = FakeGitHubAPI()
+        fake.releasesResult = [
+            .stub(id: 10, tagName: "v1.0.0", publishedAt: "2026-01-01T00:00:00Z", draft: false),
+            .stub(id: 11, tagName: "draft", publishedAt: nil, draft: true),
+        ]
+        let store = try makeStore(api: fake)
+        store.watchlist = ["octo/repo"]
+
+        await store.refresh()
+        await store.awaitRepoFeedsHydration()
+
+        XCTAssertEqual(store.releases.map(\.release.id), [10])
+    }
+
+    func testEmptyWatchlistClearsFeedsAndMarksLoaded() async throws {
+        let fake = FakeGitHubAPI()
+        let store = try makeStore(api: fake)
+        // watchlist defaults to empty in the test init.
+
+        await store.refresh()
+        await store.awaitRepoFeedsHydration()
+
+        XCTAssertTrue(store.actionRuns.isEmpty)
+        XCTAssertTrue(store.releases.isEmpty)
+        XCTAssertTrue(store.hasLoadedRepoFeeds)
+    }
+
+    func testActionRunsAttentionCountCountsFailingAndRunning() async throws {
+        var fake = FakeGitHubAPI()
+        fake.workflowRunsResult = [
+            .stub(id: 1, status: "completed", conclusion: "success"),
+            .stub(id: 2, status: "completed", conclusion: "failure"),
+            .stub(id: 3, status: "in_progress", conclusion: nil),
+        ]
+        let store = try makeStore(api: fake)
+        store.watchlist = ["octo/repo"]
+
+        await store.refresh()
+        await store.awaitRepoFeedsHydration()
+
+        XCTAssertEqual(store.actionRunsAttentionCount, 2) // failure + running
+    }
+
+    func testRemoveAccountPrunesFeedsAndStarred() async throws {
+        var fake = FakeGitHubAPI()
+        fake.starredResult = ["octo/repo"]
+        fake.workflowRunsResult = [.stub(id: 1)]
+        fake.releasesResult = [.stub(id: 10)]
+        let account = try makeAccount()
+        let store = try makeStore(api: fake, accounts: [account])
+        store.watchlist = ["octo/repo"]
+
+        await store.refresh()
+        await store.awaitRepoFeedsHydration()
+        XCTAssertFalse(store.actionRuns.isEmpty)
+        XCTAssertTrue(try store.isStarred(item(SearchIssue.stub(id: 1))))
+
+        store.removeAccount(id: account.id)
+
+        XCTAssertTrue(store.actionRuns.isEmpty)
+        XCTAssertTrue(store.releases.isEmpty)
+        XCTAssertFalse(try store.isStarred(item(SearchIssue.stub(id: 1))))
+    }
 }
 
 /// In-memory token store so migration/account tests can inject `AppStore`'s Keychain hooks

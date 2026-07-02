@@ -8,6 +8,7 @@ struct IssueRow: View {
     let issue: SearchIssue
     var labels: [String] = []
     var isUnseen = false
+    var isStarred = false
 
     private var state: GitHubState {
         GitHubState(issue: issue)
@@ -40,6 +41,7 @@ struct IssueRow: View {
 
     private var metaLine: some View {
         HStack(spacing: Theme.Spacing.xs) {
+            StarMarker(isStarred: isStarred)
             Text(issue.repositorySlug)
             Text("#\(issue.number)")
                 .font(Theme.Typography.mono)

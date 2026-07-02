@@ -34,6 +34,26 @@ final class AppStore {
     /// session (and are refreshed on relaunch). Mutated by the hydration helpers in
     /// `AppStoreHydration.swift`, so it's internal (not `private`).
     var repoMergeInfo: [String: RepoMergeInfo] = [:]
+    /// The `owner/name` slugs each account has starred (lowercased for case-insensitive
+    /// membership), keyed by account. A cross-tab signal: rows on a starred repo get a marker,
+    /// and the "Starred" filter narrows every tab to them. Loaded best-effort alongside sections.
+    var starredByAccount: [Account.ID: Set<String>] = [:]
+    /// Recent Actions workflow runs across the watched repos (see `watchlist`), merged and sorted
+    /// newest-first. Written only by the repo-feeds hydration wave (`AppStoreRepoFeeds.swift`) and
+    /// the reset sites here, so it's internal (not `private(set)`); views read only.
+    var actionRuns: [AccountActionRun] = []
+    /// Recent releases across the watched repos, merged and sorted newest-first. Written only by
+    /// the same wave as `actionRuns`; views read only.
+    var releases: [AccountRelease] = []
+    /// Bumped on every repo-feeds wave (and on account add/remove/sign-out) so a slow in-flight
+    /// wave can detect it's stale and drop its writes — mirrors `checksGeneration`.
+    var repoFeedsGeneration = 0
+    /// The single in-flight repo-feeds (Actions + Releases) hydration wave, if any.
+    var repoFeedsTask: Task<Void, Never>?
+    /// True once the first repo-feeds wave has completed — lets the Actions/Releases tabs tell
+    /// "still loading" (skeleton) apart from "loaded and empty" (caught-up / add-repos nudge).
+    /// Written by the wave and the reset sites, so it's internal.
+    var hasLoadedRepoFeeds = false
     var isRefreshing = false
     var lastErrorMessage: String?
     var sessionExpired = false
@@ -202,6 +222,20 @@ final class AppStore {
 
     static let savedQueriesKey = "gbar.savedQueries"
 
+    /// The repos (as `owner/name` slugs) to iterate for the per-repo surfaces — Actions runs and
+    /// Releases. Explicit and user-curated (Settings ▸ Watchlist): this is the *authoritative*
+    /// scope for those tabs, deliberately not the starred set, so the per-repo request fan-out
+    /// stays bounded and predictable. Persisted as JSON like `savedQueries`.
+    var watchlist: [String] {
+        didSet {
+            if let data = try? JSONEncoder().encode(watchlist) {
+                UserDefaults.standard.set(data, forKey: Self.watchlistKey)
+            }
+        }
+    }
+
+    static let watchlistKey = "gbar.watchlist"
+
     var isSignedIn: Bool {
         !accounts.isEmpty || pendingLegacyToken != nil
     }
@@ -259,6 +293,16 @@ final class AppStore {
         visibleNotifications.filter(\.notification.unread).count
     }
 
+    /// Whether the repo an item sits on is starred by that item's account (case-insensitive).
+    func isStarred(_ item: AccountItem) -> Bool {
+        starredByAccount[item.account.id]?.contains(item.issue.repositorySlug.lowercased()) ?? false
+    }
+
+    /// Whether the repo a notification belongs to is starred by its account (case-insensitive).
+    func isStarred(_ item: AccountNotification) -> Bool {
+        starredByAccount[item.account.id]?.contains(item.notification.repository.fullName.lowercased()) ?? false
+    }
+
     /// The hydrated CI status/detail for a tagged PR item, if any.
     func checks(for item: AccountItem) -> PRChecks? {
         prChecks[PRCheckKey(accountID: item.account.id, prID: item.issue.id)]
@@ -298,6 +342,14 @@ final class AppStore {
             }
         } else {
             savedQueries = SearchQuery.defaults
+        }
+        // Watchlist starts empty — the Actions/Releases tabs prompt the user to add repos.
+        if let data = UserDefaults.standard.data(forKey: Self.watchlistKey),
+           let decoded = try? JSONDecoder().decode([String].self, from: data)
+        {
+            watchlist = decoded
+        } else {
+            watchlist = []
         }
         // Notification toggles default on; absence of the key means first launch.
         let defaults = UserDefaults.standard
@@ -343,6 +395,7 @@ final class AppStore {
         oauthClientID = ""
         pollInterval = PollInterval.off.rawValue
         savedQueries = SearchQuery.defaults
+        watchlist = []
         self.accounts = accounts
         self.makeAPI = makeAPI
         tokenForAccount = { _ in token }
@@ -462,11 +515,14 @@ extension AppStore {
 
         sections = mergeSections(loadsByAccount, queries: queries)
         notifications = mergeNotifications(loadsByAccount)
+        mergeStarred(loadsByAccount)
         applyErrorState(from: loadsByAccount)
 
         let apis = Dictionary(uniqueKeysWithValues: accountAPIs.map { ($0.account.id, $0.api) })
-        // Kick off CI hydration without awaiting it, so the list shows immediately.
+        // Kick off CI hydration and the per-repo feeds (Actions + Releases) without awaiting them,
+        // so the list shows immediately.
         hydrateChecks(for: sections, apis: apis)
+        hydrateRepoFeeds(apis: apis)
         hasLoaded = true
     }
 
@@ -565,6 +621,8 @@ extension AppStore {
         persistAccounts()
         checksTask?.cancel()
         checksGeneration += 1
+        repoFeedsTask?.cancel()
+        repoFeedsGeneration += 1
         lastErrorMessage = nil
         sessionExpired = false
         expiredAccountID = nil
@@ -583,6 +641,8 @@ extension AppStore {
         if accountFilter == id { accountFilter = nil }
         checksTask?.cancel()
         checksGeneration += 1
+        repoFeedsTask?.cancel()
+        repoFeedsGeneration += 1
         sections = sections.map { section in
             LoadedSection(
                 id: section.id,
@@ -595,6 +655,9 @@ extension AppStore {
         prChecks = prChecks.filter { $0.key.accountID != id }
         prGates = prGates.filter { $0.key.accountID != id }
         repoMergeInfo = repoMergeInfo.filter { !$0.key.hasPrefix("\(id)\n") }
+        starredByAccount[id] = nil
+        actionRuns.removeAll { $0.account.id == id }
+        releases.removeAll { $0.account.id == id }
         if accounts.isEmpty {
             resetSignedOutState()
         } else {
@@ -631,11 +694,18 @@ extension AppStore {
         checksTask?.cancel()
         checksTask = nil
         checksGeneration += 1
+        repoFeedsTask?.cancel()
+        repoFeedsTask = nil
+        repoFeedsGeneration += 1
         sections = []
         notifications = []
         prChecks = [:]
         prGates = [:]
         repoMergeInfo = [:]
+        starredByAccount = [:]
+        actionRuns = []
+        releases = []
+        hasLoadedRepoFeeds = false
         hasLoaded = false
         sessionExpired = false
         expiredAccountID = nil

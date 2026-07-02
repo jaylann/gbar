@@ -11,6 +11,7 @@ struct PRRow: View {
     var additions: Int?
     var deletions: Int?
     var isUnseen = false
+    var isStarred = false
 
     private var state: GitHubState {
         GitHubState(issue: issue)
@@ -51,6 +52,7 @@ struct PRRow: View {
 
     private var metaLine: some View {
         HStack(spacing: Theme.Spacing.xs) {
+            StarMarker(isStarred: isStarred)
             Text(issue.repositorySlug)
             Text("#\(issue.number)")
                 .font(Theme.Typography.mono)
