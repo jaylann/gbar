@@ -78,4 +78,4 @@
 --enable wrapEnumCases,wrapMultilineStatementBraces,wrapSwitchCases,yodaConditions
 --enable sortImports,sortSwitchCases,sortDeclarations
 
---exclude DerivedData,.build,Derived,Tuist/.build,build,**/*.generated.swift
+--exclude DerivedData,.build,Derived,Tuist/.build,build,.claude,**/*.generated.swift

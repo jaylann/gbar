@@ -137,6 +137,10 @@ run: _ensure
     app=$(find "{{derived}}/Build/Products/Debug" -maxdepth 1 -name '{{project}}.app' | head -1)
     if [[ -n "$app" ]]; then open "$app"; else echo "build product not found"; exit 1; fi
 
+# Build, then launch the app and assert it survives startup (crash-on-launch guard)
+smoke: build
+    ./scripts/smoke-test.sh
+
 # ─── Test ───────────────────────────────────────────────────────────
 
 # Full unit test suite (macOS)

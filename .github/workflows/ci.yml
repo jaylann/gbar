@@ -1,18 +1,24 @@
 name: ci
 
 # CI gate for gbar: lint (`just check` = SwiftFormat + SwiftLint + typos) → build (compile
-# the macOS app) → test (the deterministic unit suite). The build and test jobs run in
-# parallel on separate runners, so a red test next to a green build points straight at
-# "logic broke" vs "won't compile". The `gbarTests/` suite is pure unit tests over fakes
-# (FakeGitHubAPI + MockURLProtocol) — no XCUIApplication, nothing flaky. Ad-hoc signing
-# (CODE_SIGN_IDENTITY = -) needs no secrets on CI, and the public repo gets free
+# the macOS app + launch smoke test) → test (the deterministic unit suite). The build and
+# test jobs run in parallel on separate runners, so a red test next to a green build points
+# straight at "logic broke" vs "won't compile". The `gbarTests/` suite is pure unit tests
+# over fakes (FakeGitHubAPI + MockURLProtocol) — no XCUIApplication, nothing flaky. Ad-hoc
+# signing (CODE_SIGN_IDENTITY = -) needs no secrets on CI, and the public repo gets free
 # macOS-runner minutes.
+#
+# tuist + typos install via mise so CI runs the exact versions pinned in .mise.toml
+# (mise-action caches them). swiftformat/swiftlint/just come from Homebrew.
 
 on:
   pull_request:
     branches: [main, stage]
   push:
     branches: [main, stage]
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -23,9 +29,12 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v5
-      - name: Install tools
-        run: brew install swiftformat swiftlint tuist just typos-cli
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          install_args: tuist typos
+      - name: Install lint tools
+        run: brew install swiftformat swiftlint just
       - name: Generate project
         run: just gen
       - name: Lint checks
@@ -35,25 +44,33 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v5
-      - name: Select latest Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app || true
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          install_args: tuist
       - name: Install tools
-        run: brew install tuist just
+        run: brew install just
       - name: Generate project
         run: just gen
       - name: Build (Debug, macOS)
         run: just build
+      - name: Launch smoke test
+        run: ./scripts/smoke-test.sh
 
   test:
     runs-on: macos-15
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v5
-      - name: Select latest Xcode
-        run: sudo xcode-select -s /Applications/Xcode_16.4.app || true
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Select Xcode 16.4
+        run: sudo xcode-select -s /Applications/Xcode_16.4.app
+      - uses: jdx/mise-action@e6a8b3978addb5a52f2b4cd9d91eafa7f0ab959d # v4.2.0
+        with:
+          install_args: tuist
       - name: Install tools
-        run: brew install tuist just
+        run: brew install just
       - name: Generate project
         run: just gen
       - name: Test (macOS)
