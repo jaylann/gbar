@@ -27,25 +27,33 @@ struct Avatar: View {
     /// only matters for the async miss path — the `LazyVStack` recycles rows constantly while
     /// scrolling, and re-decoding a fresh `NSImage` per recycle is the classic avatar scroll-jank.
     @State private var loaded: NSImage?
+    /// The load finished without an image (transport error / non-2xx / decode failure). Kept
+    /// distinct from "still loading" so a failed avatar falls back to the identifiable monogram
+    /// rather than a permanent gray placeholder.
+    @State private var failed = false
 
     var body: some View {
         // Prefer the async-loaded image, else a synchronous cache hit — reading the decoded image
         // straight from the shared cache avoids a one-frame placeholder flash when a recycled row
         // rebinds to an already-seen avatar.
         let image = loaded ?? url.flatMap { AvatarImageCache.shared.cached($0) }
+        // Treat a URL the shared cache already knows failed as failed straight away, so a recycled
+        // row for a broken avatar shows the monogram without a redacted-placeholder flash.
+        let didFail = failed || (url.map { AvatarImageCache.shared.hasFailed($0) } ?? false)
         Group {
             if let image {
                 Image(nsImage: image).resizable().scaledToFill()
-            } else if url != nil {
-                fallback.redacted(reason: .placeholder)
-            } else {
+            } else if url == nil || didFail {
                 fallback
+            } else {
+                fallback.redacted(reason: .placeholder)
             }
         }
         .frame(width: size.diameter, height: size.diameter)
         .clipShape(Circle())
         // Re-run when the row recycles onto a different avatar; cancels the previous load.
         .task(id: url) {
+            failed = false
             guard let url else {
                 loaded = nil
                 return
@@ -54,7 +62,15 @@ struct Avatar: View {
                 loaded = hit
                 return
             }
-            loaded = await AvatarImageCache.shared.image(for: url)
+            let result = await AvatarImageCache.shared.image(for: url)
+            // The view identity may have rebound to a new URL while the shared fetch was in flight;
+            // don't write a stale result over the newer load.
+            guard !Task.isCancelled else { return }
+            if let result {
+                loaded = result
+            } else {
+                failed = true
+            }
         }
     }
 
@@ -97,31 +113,46 @@ final class AvatarImageCache {
     private var images: [URL: NSImage] = [:]
     private var order: [URL] = []
     private var inFlight: [URL: Task<NSImage?, Never>] = [:]
+    /// URLs whose last load failed — a negative cache so scrolling past a broken avatar doesn't
+    /// re-issue the doomed fetch on every row mount. Bounded like `images`.
+    private var failedURLs: Set<URL> = []
 
     /// A synchronous cache hit, if the image is already decoded and resident.
     func cached(_ url: URL) -> NSImage? {
         images[url]
     }
 
+    /// Whether this URL's last load failed (used to show the monogram fallback without retrying).
+    func hasFailed(_ url: URL) -> Bool {
+        failedURLs.contains(url)
+    }
+
     /// Return the decoded image, fetching and caching it on a miss. Coalesces concurrent callers
-    /// for the same URL onto a single download+decode.
+    /// for the same URL onto a single download+decode; a previously failed URL returns `nil` fast.
     func image(for url: URL) async -> NSImage? {
         if let hit = images[url] { return hit }
+        if failedURLs.contains(url) { return nil }
         if let existing = inFlight[url] { return await existing.value }
         let task = Task { [weak self] () -> NSImage? in
             let data = await Self.fetchData(url)
             let image = data.flatMap { NSImage(data: $0) }
-            self?.store(image, for: url)
-            self?.inFlight[url] = nil
+            self?.finish(image, for: url)
             return image
         }
         inFlight[url] = task
         return await task.value
     }
 
-    /// Insert a freshly decoded image, evicting the oldest entry once past `capacity`.
-    private func store(_ image: NSImage?, for url: URL) {
-        guard let image else { return }
+    /// Record a completed load: clear the in-flight entry, then cache the image or mark the URL
+    /// failed.
+    private func finish(_ image: NSImage?, for url: URL) {
+        inFlight[url] = nil
+        guard let image else {
+            failedURLs.insert(url)
+            if failedURLs.count > Self.capacity { _ = failedURLs.popFirst() }
+            return
+        }
+        failedURLs.remove(url)
         if images[url] == nil { order.append(url) }
         images[url] = image
         if order.count > Self.capacity {
