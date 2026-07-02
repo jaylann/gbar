@@ -17,18 +17,26 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   tag:
     runs-on: ubuntu-latest
     timeout-minutes: 3
+    permissions:
+      contents: write
+    # The stage ruleset requires green checks on pushes, which the sync merge commit can't
+    # have. The lanfermann-release-bot app is a ruleset bypass actor, so the sync pushes
+    # with its token. Gated on the key existing → a self-host fork (no ruleset, no secret)
+    # still syncs fine with GITHUB_TOKEN.
+    env:
+      HAS_BOT: ${{ secrets.RP_APP_KEY != '' }}
     outputs:
       created: ${{ steps.check.outputs.exists == 'false' }}
       tag: ${{ steps.version.outputs.tag }}
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -68,19 +76,31 @@ jobs:
             --target main \
             --generate-notes
 
+      - name: Mint release-bot token
+        if: steps.check.outputs.exists == 'false' && env.HAS_BOT == 'true'
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_KEY }}
+
       - name: Sync stage to main
         if: steps.check.outputs.exists == 'false'
+        env:
+          PUSH_TOKEN: ${{ steps.bot-token.outputs.token || secrets.GITHUB_TOKEN }}
         run: |
           git fetch origin stage
           git checkout stage
           git merge origin/main --no-edit
-          git push origin stage
+          git push "https://x-access-token:${PUSH_TOKEN}@github.com/${{ github.repository }}.git" stage
 
   dmg:
     needs: tag
     if: needs.tag.outputs.created == 'true'
     runs-on: macos-15
     timeout-minutes: 30
+    permissions:
+      contents: write
     # Secrets can't be used in `if:` directly, so surface presence as job-level booleans.
     # Each signing/notary/cask step is gated on these so a self-host fork with no secrets
     # still produces a working (ad-hoc, un-notarized) DMG instead of failing the job.
@@ -91,7 +111,7 @@ jobs:
       HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
       HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
