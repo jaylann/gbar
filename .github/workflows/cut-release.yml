@@ -1,0 +1,91 @@
+name: cut release
+
+# One-click release cut: run from the Actions tab, pick a bump, and it opens the
+# stage → main promotion PR (with version bump + milestone). Merging that PR is the
+# release action — release.yml then tags, builds, signs, notarizes and uploads the DMG.
+#
+# Everything runs as the lanfermann-release-bot app: a GITHUB_TOKEN-created PR wouldn't
+# trigger CI (GitHub blocks recursive workflow runs), so the required checks on main
+# would never report and the PR could never merge.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump (none = release the current Project.swift version)"
+        type: choice
+        options: [none, patch, minor, major]
+        default: none
+
+permissions: {}
+
+jobs:
+  cut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Mint release-bot token
+        id: bot-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.RP_APP_ID }}
+          private-key: ${{ secrets.RP_APP_KEY }}
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: stage
+          token: ${{ steps.bot-token.outputs.token }}
+
+      - name: Compute version
+        id: version
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: |
+          CUR=$(grep -oE 'marketingVersion = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
+          BUILD=$(grep -oE 'buildNumber = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
+          if [[ -z "$CUR" ]]; then echo "::error::no marketingVersion in Project.swift"; exit 1; fi
+          IFS=. read -r MA MI PA <<< "$CUR"
+          case "$BUMP" in
+            none)  NEW="$CUR" ;;
+            patch) NEW="$MA.$MI.$((PA + 1))" ;;
+            minor) NEW="$MA.$((MI + 1)).0" ;;
+            major) NEW="$((MA + 1)).0.0" ;;
+          esac
+          if git rev-parse "v$NEW" >/dev/null 2>&1 || git ls-remote --exit-code origin "refs/tags/v$NEW" >/dev/null 2>&1; then
+            echo "::error::tag v$NEW already exists — pick a bump"; exit 1
+          fi
+          echo "current=$CUR" >> "$GITHUB_OUTPUT"
+          echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "build=$((BUILD + 1))" >> "$GITHUB_OUTPUT"
+
+      - name: Create release branch (+ bump)
+        env:
+          NEW: ${{ steps.version.outputs.new }}
+          CUR: ${{ steps.version.outputs.current }}
+          BUILD: ${{ steps.version.outputs.build }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          git config user.name "lanfermann-release-bot[bot]"
+          git config user.email "lanfermann-release-bot[bot]@users.noreply.github.com"
+          git checkout -b "release/v$NEW"
+          if [[ "$BUMP" != "none" ]]; then
+            sed -i -E "s/marketingVersion = \"$CUR\"/marketingVersion = \"$NEW\"/" Project.swift
+            sed -i -E "s/buildNumber = \"[0-9]+\"/buildNumber = \"$BUILD\"/" Project.swift
+            git commit -am "chore(release): bump version to v$NEW"
+          fi
+          git push origin "release/v$NEW"
+
+      - name: Ensure milestone + open promotion PR
+        env:
+          GH_TOKEN: ${{ steps.bot-token.outputs.token }}
+          NEW: ${{ steps.version.outputs.new }}
+        run: |
+          gh api "repos/${{ github.repository }}/milestones" -f title="v$NEW" >/dev/null 2>&1 \
+            || echo "milestone v$NEW already exists"
+          gh pr create \
+            --repo "${{ github.repository }}" \
+            --base main \
+            --head "release/v$NEW" \
+            --title "chore(release): v$NEW" \
+            --milestone "v$NEW" \
+            --body "$(printf 'Promotion PR for **v%s**.\n\nMerging this releases it: release.yml tags `v%s`, builds + signs + notarizes the DMG, uploads it to the GitHub release, updates the Homebrew cask, and syncs `stage` back from `main`.' "$NEW" "$NEW")"
