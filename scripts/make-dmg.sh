@@ -5,6 +5,10 @@
 # Usage: scripts/make-dmg.sh [output-dir]   (default output dir: dist/)
 # Prints the path to the created .dmg on stdout.
 #
+# GBAR_APP=<path to a built gbar.app> skips project generation + the Release build
+# (and the re-sign, which only applies to fresh builds) — handy when iterating on
+# DMG packaging/layout only.
+#
 # Signing follows Tuist/Config/Release.xcconfig: the release workflow pre-writes a
 # Developer ID Application + hardened-runtime config (then notarizes + staples the DMG),
 # so the shipped build opens with no Gatekeeper prompt. A local `just dmg` without those
@@ -22,6 +26,12 @@ OUT_DIR="${1:-dist}"
 DERIVED="build"
 STAGING="$(mktemp -d)"
 trap 'rm -rf "$STAGING"' EXIT
+
+if [ -n "${GBAR_APP:-}" ]; then
+    APP="$GBAR_APP"
+    [ -d "$APP" ] || { echo "GBAR_APP does not exist: $APP" >&2; exit 1; }
+    echo "==> reusing prebuilt app: $APP" >&2
+else
 
 echo "==> generating project" >&2
 # Materialize + backfill the gitignored xcconfigs before Tuist reads them, so a fresh CI
@@ -74,6 +84,8 @@ if [ -n "${TEAM:-}" ]; then
         --entitlements gbar/gbar-release.entitlements "$APP" >&2
 fi
 
+fi # GBAR_APP
+
 echo "==> packaging DMG" >&2
 cp -R "$APP" "$STAGING/"
 ln -s /Applications "$STAGING/Applications"
@@ -90,20 +102,81 @@ else
     echo "==> no app .icns or SetFile — DMG keeps the default volume icon" >&2
 fi
 
+# Custom install screen: pack the committed 1x/2x backgrounds into a retina TIFF
+# (tiffutil ships with macOS). The Finder layout itself (.DS_Store) is written below
+# while the RW image is mounted. Best-effort: a missing asset just means a plain DMG.
+BG=0
+if [ -f assets/dmg/background.png ] && [ -f assets/dmg/background@2x.png ] \
+    && command -v tiffutil >/dev/null 2>&1; then
+    mkdir -p "$STAGING/.background"
+    tiffutil -cathidpicheck assets/dmg/background.png assets/dmg/background@2x.png \
+        -out "$STAGING/.background/background.tiff" >&2
+    BG=1
+else
+    echo "==> no DMG background assets or tiffutil — plain Finder window" >&2
+fi
+
 mkdir -p "$OUT_DIR"
 DMG="$OUT_DIR/gbar-$VERSION.dmg"
 rm -f "$DMG"
 
-if [ "$VOLICON" = 1 ]; then
-    # Custom volume icons need HFS+ and the volume's kHasCustomIcon flag, which can only be
-    # set on a mounted read-write image — so build UDRW, flag it, then convert to UDZO.
+if [ "$VOLICON" = 1 ] || [ "$BG" = 1 ]; then
+    # Volume icon + Finder layout both need HFS+ and a mounted read-write image (the
+    # kHasCustomIcon flag and the volume .DS_Store can only be set live) — so build
+    # UDRW, mutate the mounted volume, then convert to UDZO.
     RW="$(mktemp -u).dmg"
-    MP="$(mktemp -d)"
     hdiutil create -volname "gbar $VERSION" -srcfolder "$STAGING" \
         -fs HFS+ -format UDRW -ov "$RW" >&2
-    hdiutil attach "$RW" -nobrowse -noverify -mountpoint "$MP" >&2
-    SetFile -a C "$MP"
-    hdiutil detach "$MP" >&2
+    # Attach browsable (no -nobrowse): Finder must see the disk to script its window.
+    # Parse the real mount point from hdiutil in case /Volumes/<name> is taken.
+    MP=$(hdiutil attach "$RW" -noverify | grep -oE '/Volumes/.+$' | head -1)
+    [ -n "$MP" ] || { echo "could not mount RW image" >&2; exit 1; }
+    VOLNAME=$(basename "$MP")
+    [ "$VOLICON" = 1 ] && SetFile -a C "$MP"
+    if [ "$BG" = 1 ]; then
+        # Write the Finder window layout (background, bounds, icon positions) into the
+        # volume's .DS_Store. Best-effort: on a headless/Finder-less runner this fails
+        # without failing the release — the DMG then opens with default Finder layout.
+        if osascript >&2 <<EOF
+tell application "Finder"
+    tell disk "$VOLNAME"
+        open
+        set current view of container window to icon view
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 860, 548}
+        set viewOpts to the icon view options of container window
+        set arrangement of viewOpts to not arranged
+        set icon size of viewOpts to 128
+        set text size of viewOpts to 12
+        set label position of viewOpts to bottom
+        set background picture of viewOpts to file ".background:background.tiff"
+        set position of item "gbar.app" of container window to {166, 205}
+        set position of item "Applications" of container window to {494, 205}
+        -- close + reopen, then re-assert the window state: Finder only reliably
+        -- persists bounds/toolbar/statusbar into .DS_Store from the last close.
+        close
+        open
+        set toolbar visible of container window to false
+        set statusbar visible of container window to false
+        set the bounds of container window to {200, 120, 860, 548}
+        update without registering applications
+        delay 2
+        close
+        delay 1
+    end tell
+end tell
+EOF
+        then
+            # Give Finder time to flush .DS_Store before the volume detaches.
+            sync
+            sleep 2
+        else
+            echo "==> Finder layout failed (headless?) — DMG keeps default layout" >&2
+        fi
+    fi
+    # Finder may still hold the volume briefly after the layout script — retry forced.
+    hdiutil detach "$MP" >&2 || { sleep 2; hdiutil detach "$MP" -force >&2; }
     hdiutil convert "$RW" -format UDZO -ov -o "$DMG" >&2
     rm -f "$RW"
 else
