@@ -86,7 +86,9 @@ jobs:
     # still produces a working (ad-hoc, un-notarized) DMG instead of failing the job.
     env:
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
-      HAS_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
+      # Notarization requires a Developer-ID-signed app, so it also depends on the signing
+      # cert — otherwise a partial-secrets config would submit an ad-hoc DMG that Apple rejects.
+      HAS_NOTARY: ${{ secrets.MACOS_CERTIFICATE != '' && secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_PASSWORD != '' && secrets.GBAR_DEVELOPMENT_TEAM_RELEASE != '' }}
       HAS_TAP: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v5
@@ -142,7 +144,9 @@ jobs:
 
       - name: Build DMG
         id: build
-        run: echo "path=$(./scripts/make-dmg.sh dist)" >> "$GITHUB_OUTPUT"
+        run: |
+          DMG=$(./scripts/make-dmg.sh dist)
+          echo "path=$DMG" >> "$GITHUB_OUTPUT"
 
       # Notarize the DMG (contains a Developer-ID-signed, hardened-runtime app), then staple
       # the ticket so Gatekeeper accepts it offline. Skipped on self-host forks (no secrets).
