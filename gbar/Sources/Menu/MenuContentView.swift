@@ -349,11 +349,17 @@ struct MenuContentView: View {
                     errorBanner(message)
                 }
                 ScrollView {
-                    // Lazy so long lists (a ~100-PR tab) don't realize every row up front, and
+                    // Eager (not `LazyVStack`): the rows are variable-height (an expanded PR adds
+                    // its `CheckRow` detail; per-row CI hydration toggles the disclosure gutter),
+                    // and a `LazyVStack` over-reserves space for such rows on macOS — leaving empty
+                    // gaps that appear/disappear as scrolling forces re-measurement. Eager layout
+                    // measures every row exactly, so the geometry is always right, and since rows
+                    // are never recycled mid-scroll, scrolling stays allocation-free (no per-frame
+                    // row realization or avatar re-decode). The lists are bounded (a height-capped,
+                    // intermittently-opened popover), so realizing them up front is cheap. Kept
                     // deliberately free of any ambient `.animation`/row `.transition`: a filter
-                    // toggle animates the diff via `withAnimation` at the chip (see MenuFilters),
-                    // so scrolling — which realizes rows constantly — stays native-fast.
-                    LazyVStack(alignment: .leading, spacing: Theme.Spacing.sm) {
+                    // toggle animates the diff via `withAnimation` at the chip (see MenuFilters).
+                    VStack(alignment: .leading, spacing: Theme.Spacing.sm) {
                         content()
                     }
                     // A small inset so rows (and the PR disclosure chevron, which sits left of
@@ -519,7 +525,7 @@ extension MenuContentView {
         HStack(spacing: Theme.Spacing.xs) {
             accountBadge(item)
             if item.issue.isPullRequest {
-                PRRowItem(store: store, item: item, checks: store.checks(for: item)) { url in openURL(url) }
+                PRRowItem(store: store, item: item) { url in openURL(url) }
             } else {
                 issueRow(item)
             }
