@@ -168,6 +168,29 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertNil(reviews.last?.submittedAt)
     }
 
+    func testMarkAllNotificationsReadHitsExpectedPath() async throws {
+        let box = HeaderBox()
+        MockURLProtocol.handler = { request in
+            box.path = request.url?.path
+            box.method = request.httpMethod
+            box.headers = request.allHTTPHeaderFields
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 202, httpVersion: nil, headerFields: nil)
+            )
+            return (response, Data())
+        }
+
+        let client = try makeClient()
+        try await client.markAllNotificationsRead()
+
+        XCTAssertEqual(box.path, "/notifications")
+        XCTAssertEqual(box.method, "PUT")
+        let headers = try XCTUnwrap(box.headers)
+        XCTAssertEqual(headers["Authorization"], "Bearer test-token")
+        XCTAssertEqual(headers["X-GitHub-Api-Version"], "2022-11-28")
+    }
+
     func testRepositoryDecodesPermissions() async throws {
         let pathBox = HeaderBox()
         MockURLProtocol.handler = { request in
@@ -340,4 +363,5 @@ private final class PageCounter: @unchecked Sendable {
 private final class HeaderBox: @unchecked Sendable {
     var headers: [String: String]?
     var path: String?
+    var method: String?
 }

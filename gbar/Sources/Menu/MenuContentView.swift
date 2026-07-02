@@ -3,7 +3,7 @@ import SwiftUI
 /// The top-level domains the menu switches between. PRs and Issues are both
 /// `/search/issues`-driven (saved-query sections routed by `LoadedSection.kind`);
 /// Notifications is its own data source.
-private enum MenuTab: String, CaseIterable {
+enum MenuTab: String, CaseIterable {
     case prs
     case issues
     case notifications
@@ -19,15 +19,6 @@ private enum MenuTab: String, CaseIterable {
         case .releases: "Releases"
         }
     }
-}
-
-/// Single-select filter mode for the PRs tab, surfaced as `FilterChip`s. `needsReview` is
-/// approximated by membership in the built-in `review-requested` section (per-item review
-/// state isn't loaded, and this pass adds no new API surface).
-private enum PRFilter {
-    case all
-    case failingCI
-    case needsReview
 }
 
 /// The status-item popover, built on the design system: a consolidated top bar — inline
@@ -46,12 +37,15 @@ struct MenuContentView: View {
     @AppStorage("gbar.menu.selectedTab") private var selectedTabRaw = MenuTab.prs.rawValue
     @State private var searchText = ""
     @State private var searchActive = false
-    @State private var prFilter: PRFilter = .all
+    /// Filter state is `internal` (not `private`) so the chip UI in `MenuFilters.swift` can bind
+    /// to it: `prFilter`/`inboxReason` are radio state, `starredOnly` the cross-tab toggle.
+    @State var prFilter: PRFilter = .all
     /// Cross-tab toggle: narrow the active tab to rows on repos the viewer has starred.
-    @State private var starredOnly = false
+    @State var starredOnly = false
+    @State var inboxReason: InboxReason = .all
     @FocusState private var searchFocused: Bool
 
-    private var selectedTab: MenuTab {
+    var selectedTab: MenuTab {
         MenuTab(rawValue: selectedTabRaw) ?? .prs
     }
 
@@ -178,22 +172,6 @@ struct MenuContentView: View {
             .transition(.move(edge: .top).combined(with: .opacity))
     }
 
-    /// Filter chips. The "Starred" toggle is cross-tab (shown everywhere); the PR radio chips
-    /// (All / Failing CI / Needs review) only make sense on the PRs tab.
-    private var chipsRow: some View {
-        HStack(spacing: Theme.Spacing.xs) {
-            if selectedTab == .prs {
-                FilterChip(title: "All", isOn: chipBinding(.all))
-                FilterChip(title: "Failing CI", symbol: "xmark.octagon", isOn: chipBinding(.failingCI))
-                FilterChip(title: "Needs review", symbol: "eye", isOn: chipBinding(.needsReview))
-            }
-            FilterChip(title: "Starred", symbol: "star", isOn: $starredOnly)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, Theme.Spacing.md)
-        .padding(.bottom, Theme.Spacing.sm)
-    }
-
     private var tabItems: [InlineTabBar<MenuTab>.Tab] {
         MenuTab.allCases.map { .init(tag: $0, title: $0.title, count: badge(for: $0)) }
     }
@@ -239,15 +217,6 @@ struct MenuContentView: View {
         case .actions: "Filter runs"
         case .releases: "Filter releases"
         }
-    }
-
-    /// Drives a `FilterChip` as a radio button: turning one on selects that mode; turning the
-    /// active one off resets to `.all`.
-    private func chipBinding(_ filter: PRFilter) -> Binding<Bool> {
-        Binding(
-            get: { prFilter == filter },
-            set: { isOn in prFilter = isOn ? filter : .all }
-        )
     }
 
     // MARK: Per-tab content
@@ -332,7 +301,9 @@ struct MenuContentView: View {
 
     private var notificationList: some View {
         let items = store.visibleNotifications.filter {
-            matchesSearch($0.notification) && (!starredOnly || store.isStarred($0))
+            matchesSearch($0.notification)
+                && inboxReason.matches($0.notification.reason)
+                && (!starredOnly || store.isStarred($0))
         }
         return tabScaffold(isEmpty: items.isEmpty) {
             emptyState(caughtUpTitle: "Inbox zero", caughtUpMessage: "Nothing unread right now.")
@@ -458,8 +429,11 @@ extension MenuContentView {
         searchText.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private var isFiltering: Bool {
-        !trimmedSearch.isEmpty || starredOnly || (selectedTab == .prs && prFilter != .all)
+    var isFiltering: Bool {
+        !trimmedSearch.isEmpty
+            || starredOnly
+            || (selectedTab == .prs && prFilter != .all)
+            || (selectedTab == .notifications && inboxReason != .all)
     }
 
     /// The cross-tab Starred predicate for a PR/issue item — pass-through unless the toggle is on.

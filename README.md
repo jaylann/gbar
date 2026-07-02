@@ -10,6 +10,14 @@
   and source-available.</em>
 </p>
 
+<p align="center">
+  <a href="https://github.com/jaylann/gbar/actions/workflows/ci.yml"><img src="https://github.com/jaylann/gbar/actions/workflows/ci.yml/badge.svg?branch=stage" alt="CI"></a>
+  <a href="https://github.com/jaylann/gbar/releases/latest"><img src="https://img.shields.io/github/v/release/jaylann/gbar" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Shield%201.0.0-blue" alt="License: PolyForm Shield 1.0.0"></a>
+  <img src="https://img.shields.io/badge/macOS-14%2B-black" alt="macOS 14+">
+  <img src="https://img.shields.io/badge/Swift-6-orange" alt="Swift 6">
+</p>
+
 ---
 
 ## What it does
@@ -47,7 +55,18 @@ Your tokens are stored in the **macOS Keychain**, never on disk in plaintext.
 SwiftUI (`MenuBarExtra`, `LSUIElement` agent) · macOS 14+ · Swift 6 (strict
 concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
 
-## Setup
+## Install
+
+The signed, notarized build (opens with no Gatekeeper prompt) is on the
+[Homebrew tap](https://github.com/jaylann/homebrew-tap):
+
+```bash
+brew install --cask jaylann/tap/gbar
+```
+
+Or grab the `.dmg` from the [latest release](https://github.com/jaylann/gbar/releases/latest).
+
+## Build from source
 
 ```bash
 just bootstrap   # wire git hooks + materialize local xcconfigs

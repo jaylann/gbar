@@ -19,6 +19,7 @@ final class CallRecorder: @unchecked Sendable {
 
     private let lock = NSLock()
     private var _markedThreadIDs: [String] = []
+    private var _markAllCount = 0
     private var _approvals: [Approve] = []
     private var _merges: [Merge] = []
     private var _searchCount = 0
@@ -26,6 +27,11 @@ final class CallRecorder: @unchecked Sendable {
     /// Thread IDs passed to `markNotificationRead`, in call order.
     var markedThreadIDs: [String] {
         lock.withLock { _markedThreadIDs }
+    }
+
+    /// Number of `markAllNotificationsRead` (bulk) calls received.
+    var markAllCount: Int {
+        lock.withLock { _markAllCount }
     }
 
     var approvals: [Approve] {
@@ -47,6 +53,10 @@ final class CallRecorder: @unchecked Sendable {
 
     func recordMarkRead(_ threadID: String) {
         lock.withLock { _markedThreadIDs.append(threadID) }
+    }
+
+    func recordMarkAll() {
+        lock.withLock { _markAllCount += 1 }
     }
 
     func recordApprove(repo: String, number: Int, body: String?) {
@@ -162,6 +172,14 @@ struct FakeGitHubAPI: GitHubAPI {
         recorder.recordMarkRead(threadID)
     }
 
+    /// Records the bulk mark-all call, then throws `error`/`actionError` if injected so the
+    /// store's failure path (items retained, error surfaced) is testable.
+    func markAllNotificationsRead() async throws {
+        recorder.recordMarkAll()
+        if let error { throw error }
+        if let actionError { throw actionError }
+    }
+
     func notifications() async throws -> [GitHubNotification] {
         if let error = notificationsError ?? error {
             throw error
@@ -263,6 +281,10 @@ actor GatedGitHubAPI: GitHubAPI {
     }
 
     func markNotificationRead(threadID _: String) async throws {
+        throw Unstubbed.notImplemented
+    }
+
+    func markAllNotificationsRead() async throws {
         throw Unstubbed.notImplemented
     }
 

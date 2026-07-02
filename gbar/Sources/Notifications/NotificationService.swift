@@ -80,7 +80,14 @@ final class NotificationService: NSObject, DesktopNotifying {
     /// The OS-level authorization state, so the Settings pane can surface a denial instead of
     /// posts silently no-oping. Same local-`.current()` workaround as `requestAuthorization`.
     func authorizationStatus() async -> NotificationAuthStatus {
-        await NotificationAuthStatus(UNUserNotificationCenter.current().notificationSettings().authorizationStatus)
+        await NotificationAuthStatus(Self.currentAuthorizationStatus())
+    }
+
+    /// Reads the settings in a nonisolated region and returns only the Sendable status —
+    /// awaiting the non-Sendable `UNNotificationSettings` into the main actor trips Swift
+    /// 6.0's region checker (Xcode 16.4) even though 6.2 accepts it.
+    private nonisolated static func currentAuthorizationStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
     }
 
     /// Post a banner immediately. `url` (if any) rides along in `userInfo` so a click can

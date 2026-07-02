@@ -38,6 +38,8 @@ protocol GitHubAPI: Sendable {
     func mergePullRequest(repo: String, number: Int, method: MergeMethod) async throws
     /// Mark a notification thread as read.
     func markNotificationRead(threadID: String) async throws
+    /// Mark every notification for the authenticated user as read (`PUT /notifications`).
+    func markAllNotificationsRead() async throws
     /// Fetch the signed-in user's notifications.
     func notifications() async throws -> [GitHubNotification]
     /// Fetch the check runs for a commit (`owner/name` slug + git ref/SHA).
@@ -130,6 +132,11 @@ struct GitHubClient: GitHubAPI {
 
     func markNotificationRead(threadID: String) async throws {
         let request = try makeRequest(path: "notifications/threads/\(threadID)", method: "PATCH")
+        _ = try await execute(request)
+    }
+
+    func markAllNotificationsRead() async throws {
+        let request = try makeRequest(path: "notifications", method: "PUT")
         _ = try await execute(request)
     }
 

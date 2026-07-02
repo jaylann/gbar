@@ -592,6 +592,13 @@ extension AppStore {
         }
     }
 
+    /// Drop every loaded notification belonging to `accountID` — the mutating half of the bulk
+    /// mark-read flow, kept here because `notifications` has a `private(set)` setter scoped to
+    /// this file.
+    func dropNotifications(forAccount accountID: Account.ID) {
+        notifications.removeAll { $0.account.id == accountID }
+    }
+
     /// Drop an item (by composite id) from every loaded section — optimistic UI after a merge.
     func removeItem(id: AccountItem.ID) {
         sections = sections.map { section in
