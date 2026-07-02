@@ -27,7 +27,7 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
         // menu-open), so banners can fire from a background poll before the user ever opens the
         // popover and the OS permission prompt appears at start.
         store.notifier = notificationService
-        Task { await notificationService.requestAuthorization() }
+        Task { await store.requestNotificationAuthorization() }
 
         let content = NSHostingController(
             rootView: MenuContentView(store: store) { [weak self] in self?.openSettings() }

@@ -126,6 +126,28 @@ extension AppStore {
         lastCheckStatus[key] = newStatus
     }
 
+    // MARK: - Authorization
+
+    /// Re-read OS authorization and publish it for the Settings UI. No-op when no notifier is
+    /// wired (tests/previews without one).
+    func refreshNotificationAuthStatus() async {
+        guard let notifier else { return }
+        notificationAuthStatus = await notifier.authorizationStatus()
+    }
+
+    /// Prompt the OS permission dialog (a no-op banner-wise if already decided), then re-read
+    /// the resulting status so the UI reflects the user's choice.
+    func requestNotificationAuthorization() async {
+        guard let notifier else { return }
+        await notifier.requestAuthorization()
+        notificationAuthStatus = await notifier.authorizationStatus()
+    }
+
+    /// Post a sample banner through the real notifier so the user can verify end-to-end delivery.
+    func sendTestNotification() {
+        notifier?.post(title: "gbar test notification", body: "Notifications are working.", url: nil)
+    }
+
     // MARK: - Baseline lifecycle
 
     /// Wipe every notification baseline — used on sign-out so the next sign-in re-seeds silently.
