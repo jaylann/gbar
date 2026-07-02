@@ -26,6 +26,12 @@
   <!-- destination node: filled amber (the merge) -->
   <circle cx="412" cy="205" r="8" fill="#E8843C"/>
 
+  <!-- label chips: Finder always draws icon labels BLACK once a background picture is
+       set (even in dark mode), so give the two labels a cream pill to sit on. Geometry
+       matches 128px icons at (166,205)/(494,205) with 12pt labels (center y ≈ 292). -->
+  <rect x="127" y="280" width="78" height="24" rx="12" fill="#F2EDE4"/>
+  <rect x="443" y="280" width="102" height="24" rx="12" fill="#F2EDE4"/>
+
   <!-- caption -->
   <text x="330" y="318" text-anchor="middle"
         font-family="-apple-system, 'SF Pro Text', 'Helvetica Neue', Helvetica, sans-serif"
