@@ -27,9 +27,11 @@ echo "==> generating project" >&2
 # Materialize + backfill the gitignored xcconfigs before Tuist reads them, so a fresh CI
 # checkout has them and existing ones gain any new keys (notably GBAR_ENTITLEMENTS — an
 # undefined value makes CODE_SIGN_ENTITLEMENTS empty and ships an app with no entitlements).
-just _xcconfig
-tuist install
-tuist generate --no-open
+# stdout is the script's contract (the DMG path on the last line), so every tool's chatter
+# goes to stderr — otherwise tuist's "✔ Success" et al. pollute the captured path.
+just _xcconfig >&2
+tuist install >&2
+tuist generate --no-open >&2
 
 echo "==> building gbar (Release)" >&2
 xcodebuild \
@@ -37,7 +39,7 @@ xcodebuild \
     -scheme gbar \
     -configuration Release \
     -derivedDataPath "$DERIVED" \
-    build
+    build >&2
 
 APP=$(find "$DERIVED/Build/Products/Release" -maxdepth 1 -name 'gbar.app' | head -1)
 [ -n "$APP" ] || { echo "gbar.app not found under $DERIVED/Build/Products/Release" >&2; exit 1; }
