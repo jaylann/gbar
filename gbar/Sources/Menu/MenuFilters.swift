@@ -50,9 +50,12 @@ extension MenuContentView {
             FilterChip(title: "Starred", symbol: "star", isOn: starredBinding)
             Spacer(minLength: 0)
             if selectedTab == .notifications, !isFiltering, store.unreadNotificationCount > 0 {
-                Button("Mark all read") { Task { await store.markAllRead() } }
-                    .buttonStyle(GBButtonStyle(variant: .ghost))
-                    .gbTooltip("Mark all as read", edge: .bottom)
+                Button { Task { await store.markAllRead() } } label: {
+                    DoubleCheckmarkIcon()
+                }
+                .buttonStyle(GBButtonStyle(variant: .icon))
+                .gbTooltip("Mark all as read", edge: .bottom)
+                .accessibilityLabel("Mark all as read")
             }
         }
         .padding(.horizontal, Theme.Spacing.md)

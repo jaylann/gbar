@@ -27,7 +27,7 @@ struct SearchField: View {
         .font(Theme.Typography.caption)
         .padding(.horizontal, Theme.Spacing.sm)
         .frame(height: 26)
-        .background(Surface.controlFill, in: RoundedRectangle(cornerRadius: Theme.Radius.sm, style: .continuous))
+        .background(Surface.controlFill, in: Capsule(style: .continuous))
     }
 
     @ViewBuilder
