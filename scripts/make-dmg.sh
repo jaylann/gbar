@@ -157,4 +157,34 @@ else
         -ov -format UDZO "$DMG" >&2
 fi
 
+# Brand the .dmg FILE's own Finder icon (distinct from the mounted-volume icon set
+# above). Custom file icons live in the resource fork: embed the icns into itself,
+# extract it as an 'icns' resource, append it to the DMG, then flag the file as having
+# a custom icon. Needs DeRez/Rez (Xcode CLT).
+#
+# Two deliberate limits: (1) resource forks travel as xattrs and are stripped by HTTP
+# downloads, so a DMG fetched from a GitHub release still shows the generic icon — only
+# local/AirDrop copies keep it. (2) The release DMG is Developer ID-signed, notarized,
+# and stapled downstream; branding buys nothing there (stripped on download) and would
+# ride the fork into codesign/stapler, so skip signed builds entirely. Everything here
+# is cosmetic — keep it strictly best-effort so a failure never aborts the build (which
+# would also swallow the stdout DMG-path contract that release.yml captures).
+# Match with a bash glob (not grep) so this doesn't depend on grep's flavor.
+SIGN_INFO=$(codesign -dvv "$APP" 2>&1 || true)
+if [[ "$SIGN_INFO" == *"Authority=Developer ID Application"* ]]; then
+    echo "==> signed release build — skipping .dmg file-icon (stripped on download)" >&2
+elif [ -n "$ICNS" ] && command -v Rez >/dev/null 2>&1 && command -v DeRez >/dev/null 2>&1; then
+    if {
+        cp "$ICNS" "$STAGING/icon.icns" &&
+        sips -i "$STAGING/icon.icns" >&2 &&
+        DeRez -only icns "$STAGING/icon.icns" > "$STAGING/icon.rsrc" &&
+        Rez -append "$STAGING/icon.rsrc" -o "$DMG" &&
+        SetFile -a C "$DMG"
+    }; then :; else
+        echo "==> .dmg file-icon branding failed — keeping default icon" >&2
+    fi
+else
+    echo "==> no app .icns or Rez/DeRez — .dmg file keeps the default icon" >&2
+fi
+
 echo "$DMG"
