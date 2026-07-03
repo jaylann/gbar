@@ -165,6 +165,14 @@ extension AppStore {
         let stateOK = detail.state == "open" && detail.draft != true && mergeableStateOK
         let mergeable = stateOK && (mergeInfo?.canMerge ?? true)
 
+        Log.store.debug("""
+        gate #\(detail.number, privacy: .public) me=\(me, privacy: .public) \
+        state=\(detail.state, privacy: .public) mergeable_state=\(detail.mergeableState ?? "nil", privacy: .public) \
+        reviews=\(reviews.count, privacy: .public) mine=\(mine.count, privacy: .public) \
+        approved=\(alreadyApproved, privacy: .public) \
+        canMerge=\(String(describing: mergeInfo?.canMerge), privacy: .public) mergeable=\(mergeable, privacy: .public)
+        """)
+
         return PRGate(
             alreadyApproved: alreadyApproved,
             mergeable: mergeable,
