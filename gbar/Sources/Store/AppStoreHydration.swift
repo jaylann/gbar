@@ -4,12 +4,15 @@ import Foundation
 /// Split out of `AppStore` to keep that file focused; these helpers own hydration-internal
 /// state (`repoMergeInfo`, `prChecks`, `prGates`, `checksTask`/`checksGeneration`).
 extension AppStore {
-    /// Backoff schedule for the post-approve gate poll. GitHub recomputes a PR's `mergeable_state`
-    /// asynchronously after an approval re-evaluates branch protection, so the first refetch usually
-    /// still reads the stale `"blocked"`. We refetch on these delays until the gate reports mergeable
-    /// (or the schedule is exhausted) — capped backoff, ~9.3s total.
+    /// Backoff schedule for the background post-approve merge-readiness poll. GitHub recomputes a
+    /// PR's `mergeable_state` asynchronously after an approval re-evaluates branch protection, so
+    /// the first refetch still reads the stale `"blocked"` and Merge would stay hidden. We refetch
+    /// on these delays until the gate reports mergeable (or the schedule is exhausted) — capped
+    /// backoff, ~18s total. It runs off the approve call's path (see `startMergeReadinessPoll`), so
+    /// a generous window costs the user nothing: the composer has already closed.
     static let approveRefreshRetryDelays: [Duration] = [
-        .milliseconds(800), .milliseconds(1200), .milliseconds(1800), .milliseconds(2500), .seconds(3),
+        .milliseconds(800), .milliseconds(1200), .milliseconds(1800), .milliseconds(2500),
+        .seconds(3), .seconds(4), .seconds(5),
     ]
 
     /// One PR to hydrate: its key, the issue, the owning account's `login` (to spot the
@@ -44,38 +47,47 @@ extension AppStore {
     /// Approve/Merge buttons reflect the new state immediately instead of waiting for the next
     /// poll. Reuses `fetchPRState`/`deriveGate` and the cached repo merge info, but only the gate:
     /// CI can't have changed on an approval, so we skip the check-runs request and leave
-    /// `prChecks` untouched (a re-write would blink the CI dot on a flaky fetch).
-    ///
-    /// Polls with backoff rather than fetching once: GitHub recomputes `mergeable_state`
-    /// asynchronously after an approval, so the first refetch typically still reads the stale
-    /// `"blocked"` and the Merge button would stay hidden until the next background poll. We
-    /// re-fetch on `approveRefreshRetryDelays` until the gate reports mergeable (or the schedule is
-    /// exhausted — the PR is genuinely still blocked, e.g. a second required approval). Each pass
-    /// writes the gate, so `alreadyApproved` (strongly consistent) flips on the first fetch while
-    /// Merge appears the moment the recompute lands. A failed detail fetch yields a `nil` gate,
-    /// which we skip rather than blank a good one. Guarded by `checksGeneration`: if a full
-    /// hydration wave supersedes (and possibly prunes) this key while we poll, we bail and let that
-    /// wave own the state.
-    func refreshPRState(for item: AccountItem, using api: GitHubAPI) async {
+    /// `prChecks` untouched (a re-write would blink the CI dot on a flaky fetch). A failed detail
+    /// fetch yields a `nil` gate, which we skip rather than blank a good one, and return the gate
+    /// still in place. Guarded by `checksGeneration`: if a full hydration wave supersedes (and
+    /// possibly prunes) this key while we fetch, we drop the write and let that wave own the state.
+    /// Returns the resulting gate so the caller can decide whether to keep polling.
+    @discardableResult
+    func refreshPRState(for item: AccountItem, using api: GitHubAPI) async -> PRGate? {
         let key = PRCheckKey(accountID: item.account.id, prID: item.issue.id)
         let generation = checksGeneration
         let cacheKey = repoPermissionKey(accountID: item.account.id, slug: item.issue.repositorySlug)
         let mergeInfo = repoMergeInfo[cacheKey]
+        let state = await Self.fetchPRState(
+            for: item.issue, login: item.account.login, mergeInfo: mergeInfo, using: api, includeChecks: false
+        )
+        guard checksGeneration == generation else { return prGates[key] }
+        guard let gate = state.gate else { return prGates[key] } // failed fetch — keep the old gate
+        prGates[key] = gate
+        return gate
+    }
 
-        // One extra iteration beyond the delay count: the first fetch is immediate, each
-        // subsequent one is preceded by the corresponding backoff.
-        for attempt in 0...Self.approveRefreshRetryDelays.count {
-            if attempt > 0 {
-                await sleep(Self.approveRefreshRetryDelays[attempt - 1])
+    /// After an approval that didn't immediately unblock Merge, poll the PR's gate in the
+    /// background until it reports mergeable (or the backoff schedule is exhausted — the PR is
+    /// genuinely still blocked, e.g. by a second required approval or a failing check). GitHub
+    /// recomputes `mergeable_state` asynchronously after the approval, so a single refetch reads the
+    /// stale `"blocked"`; this converges the Merge button to the truth without re-running the
+    /// section search (which would drop the just-approved PR out of a `review-requested:@me`
+    /// section before the viewer can merge it in place). Runs as a tracked, cancellable task so it
+    /// never blocks the inline approve composer; superseded by the next approval and cancelled on
+    /// sign-out.
+    func startMergeReadinessPoll(for item: AccountItem, using api: GitHubAPI) {
+        mergeReadinessTask?.cancel()
+        mergeReadinessTask = Task { [weak self] in
+            for delay in Self.approveRefreshRetryDelays {
+                await self?.sleep(delay)
+                guard let self, !Task.isCancelled, self.isSignedIn else { return }
+                // Stop once the PR has left every section (a full refresh dropped it) — there's no
+                // row left to reveal Merge on, and writing its gate would only re-add stale cruft.
+                guard self.prSections.contains(where: { $0.items.contains { $0.id == item.id } }) else { return }
+                let gate = await self.refreshPRState(for: item, using: api)
+                if gate?.mergeable == true { return }
             }
-            guard checksGeneration == generation else { return }
-            let state = await Self.fetchPRState(
-                for: item.issue, login: item.account.login, mergeInfo: mergeInfo, using: api, includeChecks: false
-            )
-            guard checksGeneration == generation else { return }
-            guard let gate = state.gate else { continue } // failed fetch — keep the old gate, retry
-            prGates[key] = gate
-            if gate.mergeable { return } // recompute landed (or was never blocked) — done
         }
     }
 
