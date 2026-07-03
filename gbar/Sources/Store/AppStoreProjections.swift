@@ -28,12 +28,43 @@ extension AppStore {
         visibleNotifications = notifications.filter { $0.account.id == filter }
     }
 
-    /// Count of actionable PRs — review-requested plus assigned — shown on the menu-bar icon.
-    /// Intentionally global (ignores the in-menu account filter): the icon reflects app-wide
-    /// state, not a transient view scope.
+    /// Per-source counts for the menu-bar badge, in `BadgeSource.allCases` order, restricted to
+    /// the user-selected `badgeSources`. Section sources are **deduped by item across all of
+    /// them** — the first source to claim a PR/issue owns it — so a PR that is both assigned and
+    /// review-requested is counted once and the breakdown sums exactly to `badgeCount`. The
+    /// `.inbox` source contributes the **global** unread count (not the account-filtered
+    /// projection), since the badge reflects app-wide state, not a transient view scope.
+    /// (`total` rather than `count` so SwiftLint's `empty_count` rule doesn't mistake the Int
+    /// field for a collection-emptiness check.)
+    var badgeBreakdown: [(source: BadgeSource, total: Int)] {
+        var seen: Set<AccountItem.ID> = []
+        return BadgeSource.allCases.compactMap { source in
+            guard badgeSources.contains(source.rawValue) else { return nil }
+            let total: Int
+            if source == .inbox {
+                total = notifications.filter(\.notification.unread).count
+            } else {
+                let items = sections.first { $0.id == source.rawValue }?.items ?? []
+                total = items.reduce(0) { seen.insert($1.id).inserted ? $0 + 1 : $0 }
+            }
+            return (source, total)
+        }
+    }
+
+    /// The number shown next to the menu-bar icon — the deduped sum of the selected badge
+    /// sources. Intentionally global (ignores the in-menu account filter).
     var badgeCount: Int {
-        let actionable: Set = ["review-requested", "assigned-prs"]
-        return sections.filter { actionable.contains($0.id) }.reduce(0) { $0 + $1.items.count }
+        badgeBreakdown.reduce(0) { $0 + $1.total }
+    }
+
+    /// Hover-tooltip / accessibility text spelling out what the badge number means: a full
+    /// sentence for a single active source, a `·`-joined breakdown for several, or a calm
+    /// "nothing needs your attention" when the count is zero.
+    var badgeTooltip: String {
+        let active = badgeBreakdown.filter { $0.total > 0 }
+        guard let first = active.first else { return "gbar — nothing needs your attention" }
+        if active.dropFirst().isEmpty { return first.source.soloTooltip(first.total) }
+        return active.map { "\($0.total) \($0.source.shortLabel)" }.joined(separator: " · ")
     }
 
     func filteredSections(kind: SearchQuery.Section.Kind) -> [LoadedSection] {

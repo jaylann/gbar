@@ -139,6 +139,66 @@ enum ReauthStatus: Equatable {
     case failed(String)
 }
 
+/// A candidate contributor to the menu-bar badge count. Raw values match the default
+/// `SearchQuery` section ids (`SearchQuery.defaults`); `.inbox` maps to unread notifications
+/// rather than a search section. The badge sums the user-selected sources (deduped by PR/issue),
+/// and `allCases` order fixes both the Settings row order and the tooltip breakdown order.
+///
+/// Note: only the four baseline sections + inbox are selectable — custom saved queries (UUID ids)
+/// are intentionally not badge sources.
+enum BadgeSource: String, CaseIterable, Identifiable {
+    case reviewRequested = "review-requested"
+    case assignedPRs = "assigned-prs"
+    case yourPRs = "created-prs"
+    case assignedIssues = "assigned-issues"
+    case inbox
+
+    var id: String {
+        rawValue
+    }
+
+    /// Label for the Settings toggle row.
+    var title: String {
+        switch self {
+        case .reviewRequested: "Review requested"
+        case .assignedPRs: "Assigned PRs"
+        case .yourPRs: "Your PRs"
+        case .assignedIssues: "Assigned issues"
+        case .inbox: "Unread inbox"
+        }
+    }
+
+    /// Short noun used in the multi-source tooltip breakdown ("12 to review · 3 unread").
+    var shortLabel: String {
+        switch self {
+        case .reviewRequested: "to review"
+        case .assignedPRs: "assigned"
+        case .yourPRs: "yours"
+        case .assignedIssues: "issues"
+        case .inbox: "unread"
+        }
+    }
+
+    /// A full sentence used when exactly one source is active ("12 PRs awaiting your review").
+    func soloTooltip(_ count: Int) -> String {
+        switch self {
+        case .reviewRequested: "\(count) \(prNoun(count)) awaiting your review"
+        case .assignedPRs: "\(count) \(prNoun(count)) assigned to you"
+        case .yourPRs: "\(count) \(prNoun(count)) you opened"
+        case .assignedIssues: "\(count) issue\(plural(count)) assigned to you"
+        case .inbox: "\(count) unread notification\(plural(count))"
+        }
+    }
+
+    private func prNoun(_ count: Int) -> String {
+        count == 1 ? "PR" : "PRs"
+    }
+
+    private func plural(_ count: Int) -> String {
+        count == 1 ? "" : "s"
+    }
+}
+
 /// How often the store polls GitHub in the background. Raw value is the interval in seconds;
 /// `.off` (0) disables auto-refresh entirely.
 enum PollInterval: TimeInterval, CaseIterable, Identifiable {
