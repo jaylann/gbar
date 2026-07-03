@@ -77,7 +77,10 @@ actor DeviceFlowClient {
             if let token = decoded.accessToken { return token }
             switch decoded.error {
             case "authorization_pending": continue
-            case "slow_down": waitNanos += UInt64(decoded.interval ?? 5) * 1_000_000_000
+            // GitHub's `slow_down` carries the *new* required interval (already increased), not a
+            // delta — replace, don't accumulate, or repeated slow-downs compound and burn the
+            // expiry window.
+            case "slow_down": waitNanos = UInt64(max(decoded.interval ?? 5, 1)) * 1_000_000_000
             case "expired_token": throw DeviceFlowError.expiredToken
             case "access_denied": throw DeviceFlowError.accessDenied
             case let other?: throw DeviceFlowError.unexpected(other)

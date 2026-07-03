@@ -59,6 +59,11 @@ struct GitHubClient: GitHubAPI {
     enum ClientError: Error, Equatable {
         case http(Int)
         case badURL
+        /// GitHub reported a primary/secondary rate limit (403/429 with a rate-limit header).
+        /// `until` is when access is expected back, from `Retry-After` or `X-RateLimit-Reset`
+        /// (nil when GitHub sent neither). The poll loop backs off to this time instead of
+        /// hammering the same cadence into a longer lockout.
+        case rateLimited(until: Date?)
     }
 
     let baseURL: URL
@@ -101,13 +106,32 @@ struct GitHubClient: GitHubAPI {
         return try Self.decoder.decode(PullRequestDetail.self, from: data)
     }
 
+    /// Max pages of reviews to walk. `reviewsPerPage` (100) × this cap bounds the fetch on a
+    /// pathologically-reviewed PR while still reaching well past the first page.
+    static let reviewsPageCap = 10
+    static let reviewsPerPage = 100
+
     func reviews(repo: String, number: Int) async throws -> [PullRequestReview] {
-        let request = try makeRequest(
-            path: "repos/\(repo)/pulls/\(number)/reviews",
-            queryItems: [URLQueryItem(name: "per_page", value: "100")]
-        )
-        let data = try await execute(request)
-        return try Self.decoder.decode([PullRequestReview].self, from: data)
+        // GitHub returns reviews ascending by `submitted_at`, and the gate derivation relies on
+        // "the viewer's *last* definitive review wins" — so a busy PR with more than one page of
+        // reviews must be walked to the end, not truncated at the first 100 (which would keep only
+        // the oldest reviews and drop the current verdict). Paginate via the `Link` header, capped.
+        var all: [PullRequestReview] = []
+        var page = 1
+        while page <= Self.reviewsPageCap {
+            let request = try makeRequest(
+                path: "repos/\(repo)/pulls/\(number)/reviews",
+                queryItems: [
+                    URLQueryItem(name: "per_page", value: String(Self.reviewsPerPage)),
+                    URLQueryItem(name: "page", value: String(page)),
+                ]
+            )
+            let (data, response) = try await executeWithResponse(request)
+            try all.append(contentsOf: Self.decoder.decode([PullRequestReview].self, from: data))
+            guard Self.hasNextPage(response) else { return all }
+            page += 1
+        }
+        return all
     }
 
     func repository(repo: String) async throws -> RepositoryInfo {
@@ -269,9 +293,29 @@ struct GitHubClient: GitHubAPI {
     /// non-2xx status. Used where a response header matters (e.g. the `Link` pagination cursor).
     private func executeWithResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ClientError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
+        guard let http = response as? HTTPURLResponse else { throw ClientError.http(-1) }
+        if (200..<300).contains(http.statusCode) { return (data, http) }
+        // A 403/429 carrying a rate-limit signal is distinct from a plain auth/permission failure:
+        // surface it as `.rateLimited` so the store backs off instead of re-polling into GitHub's
+        // secondary limit.
+        if http.statusCode == 403 || http.statusCode == 429 {
+            let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            if remaining == "0" || http.value(forHTTPHeaderField: "Retry-After") != nil {
+                throw ClientError.rateLimited(until: Self.rateLimitReset(from: http))
+            }
         }
-        return (data, http)
+        throw ClientError.http(http.statusCode)
+    }
+
+    /// When GitHub says access resumes, from `Retry-After` (relative seconds) or the absolute
+    /// `X-RateLimit-Reset` epoch; nil when neither header is present.
+    private static func rateLimitReset(from http: HTTPURLResponse) -> Date? {
+        if let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) {
+            return Date().addingTimeInterval(retryAfter)
+        }
+        if let reset = http.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap(Double.init) {
+            return Date(timeIntervalSince1970: reset)
+        }
+        return nil
     }
 }

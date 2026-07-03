@@ -193,6 +193,117 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertNil(reviews.last?.submittedAt)
     }
 
+    /// Reviews come back ascending by `submitted_at`, and the gate derivation trusts the viewer's
+    /// *last* review — so a multi-page PR must be walked to the end, not truncated at page 1's
+    /// stale verdict.
+    func testReviewsFollowsLinkHeaderToLastPage() async throws {
+        let counter = PageCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value ?? "1"
+            counter.record(page)
+            let headers = page == "1"
+                ? ["Link": "<https://api.github.com/repos/octo/repo/pulls/42/reviews?page=2>; rel=\"next\""]
+                : [:]
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)
+            )
+            // Page 1: an old approval. Page 2: the viewer's newer CHANGES_REQUESTED verdict.
+            let body = page == "1"
+                ? #"[{"user":{"login":"jaylann","avatar_url":null},"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z"}]"#
+                : #"[{"user":{"login":"jaylann","avatar_url":null},"state":"CHANGES_REQUESTED","submitted_at":"2026-02-01T00:00:00Z"}]"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let reviews = try await client.reviews(repo: "octo/repo", number: 42)
+
+        XCTAssertEqual(counter.pages, ["1", "2"])
+        XCTAssertEqual(reviews.count, 2)
+        // The latest verdict (last page) survives — not dropped in favour of page 1's stale approval.
+        XCTAssertEqual(reviews.last?.state, "CHANGES_REQUESTED")
+    }
+
+    // MARK: - Rate limiting
+
+    /// A primary-limit 403 (`X-RateLimit-Remaining: 0`) is surfaced as `.rateLimited` carrying the
+    /// reset time, not a generic `.http(403)`, so the store can back off instead of hammering.
+    func testExhaustedPrimaryLimitMapsToRateLimited() async throws {
+        let reset = Date().addingTimeInterval(120)
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let headers = [
+                "X-RateLimit-Remaining": "0",
+                "X-RateLimit-Reset": String(Int(reset.timeIntervalSince1970)),
+            ]
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: headers)
+            )
+            return (response, Data())
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.searchIssues("is:open")
+            XCTFail("Expected rate-limit error")
+        } catch let GitHubClient.ClientError.rateLimited(until) {
+            let until = try XCTUnwrap(until)
+            XCTAssertEqual(until.timeIntervalSince1970, reset.timeIntervalSince1970, accuracy: 1)
+        }
+    }
+
+    /// A secondary-limit 429 with `Retry-After` maps to `.rateLimited`, with the reset derived from
+    /// the relative header.
+    func testSecondaryLimitWithRetryAfterMapsToRateLimited() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: 429,
+                    httpVersion: nil,
+                    headerFields: ["Retry-After": "30"]
+                )
+            )
+            return (response, Data())
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.notifications()
+            XCTFail("Expected rate-limit error")
+        } catch let GitHubClient.ClientError.rateLimited(until) {
+            let until = try XCTUnwrap(until)
+            XCTAssertEqual(until.timeIntervalSinceNow, 30, accuracy: 3)
+        }
+    }
+
+    /// A permissions 403 (SSO/scope) with no rate-limit signal stays `.http(403)` — it is not a
+    /// rate limit and must not trigger a backoff.
+    func testForbiddenWithoutRateLimitHeadersStaysHTTP403() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(
+                    url: url,
+                    statusCode: 403,
+                    httpVersion: nil,
+                    headerFields: ["X-RateLimit-Remaining": "42"]
+                )
+            )
+            return (response, Data())
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.searchIssues("is:open")
+            XCTFail("Expected http error")
+        } catch let error as GitHubClient.ClientError {
+            XCTAssertEqual(error, .http(403))
+        }
+    }
+
     func testMarkAllNotificationsReadHitsExpectedPath() async throws {
         let box = HeaderBox()
         MockURLProtocol.handler = { request in

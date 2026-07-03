@@ -41,7 +41,19 @@ enum AuthErrorCopy {
         switch error {
         case let .http(code): httpMessage(code)
         case .badURL: "That API base URL looks invalid — check it under Advanced."
+        case let .rateLimited(until): rateLimitMessage(until: until)
         }
+    }
+
+    /// Copy for a rate-limited state, naming the retry time when GitHub told us one.
+    static func rateLimitMessage(until: Date?) -> String {
+        guard let until, until > Date() else {
+            return "Rate limited by GitHub — retrying shortly."
+        }
+        let formatter = DateFormatter()
+        formatter.dateStyle = .none
+        formatter.timeStyle = .short
+        return "Rate limited by GitHub — retrying at \(formatter.string(from: until))."
     }
 
     /// Shared copy for an HTTP status, so device-flow and REST failures speak the same language.
@@ -51,6 +63,8 @@ enum AuthErrorCopy {
             "That token was rejected. Check it hasn't expired and has the required scopes (repo, notifications)."
         case 403:
             "GitHub refused the request — you may be rate-limited or the token is missing scopes. Try again later."
+        case 429:
+            "GitHub rate-limited the request. Try again in a little while."
         case 404:
             "GitHub couldn't find that endpoint. Check the API base URL for your host under Advanced."
         case 500...599:

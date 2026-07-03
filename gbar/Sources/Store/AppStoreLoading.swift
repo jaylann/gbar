@@ -13,14 +13,12 @@ extension AppStore {
     ) async
     -> AccountLoad {
         var sections: [String: [SearchIssue]] = [:]
-        var sessionExpired = false
-        var errorMessage: String?
+        var failures = LoadFailures()
         for section in queries where section.isRunnable {
             do {
                 sections[section.id] = try await api.searchIssues(section.query)
             } catch {
-                let fallback = "Failed to load \(section.title)."
-                classify(error, expired: &sessionExpired, message: &errorMessage, fallback: fallback)
+                failures.classify(error, fallback: "Failed to load \(section.title).")
                 logFailure("search", account: account, error: error)
             }
         }
@@ -30,18 +28,18 @@ extension AppStore {
             notifications = try await api.notifications()
             notificationsSucceeded = true
         } catch {
-            classify(error, expired: &sessionExpired, message: &errorMessage, fallback: nil)
+            failures.classify(error, fallback: nil)
             logFailure("notifications", account: account, error: error)
         }
         // Starred is a decorative cross-tab signal — a failure here must never surface an error
-        // message (it's not a section the user asked for), only skip advancing the set.
+        // message (it's not a section the user asked for), only note auth/rate-limit and skip the set.
         var starred: [String] = []
         var starredSucceeded = false
         do {
             starred = try await api.starredRepos()
             starredSucceeded = true
         } catch {
-            if case .http(401) = error as? GitHubClient.ClientError { sessionExpired = true }
+            failures.noteDecorative(error)
             logFailure("starred", account: account, error: error)
         }
         return AccountLoad(
@@ -51,27 +49,46 @@ extension AppStore {
             notificationsSucceeded: notificationsSucceeded,
             starred: starred,
             starredSucceeded: starredSucceeded,
-            sessionExpired: sessionExpired,
-            errorMessage: errorMessage
+            sessionExpired: failures.sessionExpired,
+            errorMessage: failures.message,
+            rateLimitedUntil: failures.rateLimitedUntil
         )
     }
 
-    /// Fold one failure into a load's error state: a 401 flags the expired session; otherwise
-    /// apply `fallback` (a `nil` fallback is the inbox case — don't clobber a more important
-    /// section error already set this pass).
-    private nonisolated static func classify(
-        _ error: Error,
-        expired: inout Bool,
-        message: inout String?,
-        fallback: String?
-    ) {
-        if case .http(401) = error as? GitHubClient.ClientError {
-            expired = true
-            message = "Session expired — reconnect in Settings."
-        } else if let fallback {
-            message = fallback
-        } else if message == nil {
-            message = "Failed to load notifications."
+    /// Accumulates the failure signals from one account's load — expired session, a friendly
+    /// message, and a rate-limit reset — so the load helpers can fold each caught error in.
+    struct LoadFailures {
+        var sessionExpired = false
+        var message: String?
+        var rateLimitedUntil: Date?
+
+        /// Fold one failure in: a 401 flags the expired session; a rate limit records the reset;
+        /// otherwise apply `fallback` (a `nil` fallback is the inbox case — don't clobber a more
+        /// important section error already set this pass).
+        mutating func classify(_ error: Error, fallback: String?) {
+            switch error as? GitHubClient.ClientError {
+            case .http(401):
+                sessionExpired = true
+                message = "Session expired — reconnect in Settings."
+            case let .rateLimited(until):
+                rateLimitedUntil = until ?? Date().addingTimeInterval(60)
+                if message == nil { message = AuthErrorCopy.rateLimitMessage(until: until) }
+            default:
+                if let fallback {
+                    message = fallback
+                } else if message == nil {
+                    message = "Failed to load notifications."
+                }
+            }
+        }
+
+        /// Fold a decorative failure (starred): track auth/rate-limit but never surface a message.
+        mutating func noteDecorative(_ error: Error) {
+            switch error as? GitHubClient.ClientError {
+            case .http(401): sessionExpired = true
+            case let .rateLimited(until): rateLimitedUntil = until ?? Date().addingTimeInterval(60)
+            default: break
+            }
         }
     }
 
@@ -135,7 +152,8 @@ extension AppStore {
     /// Derive the action gate from PR detail + reviews. Pure so it's unit-testable.
     /// - `alreadyApproved`: the viewer's *latest* definitive review (approve / changes /
     ///   dismissed — comment & pending don't count) is an approval. Relies on GitHub returning
-    ///   reviews oldest-first; the caller caps at one page (100), enough in practice.
+    ///   reviews oldest-first; the client paginates to the last page (capped) so the latest
+    ///   verdict is included even on a heavily-reviewed PR.
     /// - `mergeable`: GitHub would show a live Merge button (open, non-draft, a clean-ish
     ///   `mergeable_state`) *and* the viewer has push access. Stays optimistic where the answer
     ///   is genuinely unknown — `nil`/`"unknown"` mergeable_state (GitHub still computing after a

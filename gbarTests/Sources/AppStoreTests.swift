@@ -910,6 +910,129 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.accounts.map(\.login), ["legacyuser"])
     }
 
+    /// A revoked legacy token (401 on `currentUser`) must be dropped so `isSignedIn` falls to false
+    /// and the sign-in prompt takes over — not retried every poll behind a permanent skeleton.
+    func testLegacyMigration401DropsTokenAndSurfacesSignIn() async throws {
+        let url = try makeURL()
+        let fake = FakeGitHubAPI(error: GitHubClient.ClientError.http(401))
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let box = TokenBox()
+        store.storeToken = { token, key in box.set(token, key) }
+        store.deleteToken = { box.remove($0) }
+        store.tokenForAccount = { box.get($0.keychainKey) }
+        box.set("dead-token", Credential.keychainKey)
+        store.pendingLegacyTokenForTests = "dead-token"
+        XCTAssertTrue(store.isSignedIn)
+
+        await store.refresh()
+
+        XCTAssertFalse(store.isSignedIn)
+        XCTAssertNil(store.pendingLegacyTokenForTests)
+        XCTAssertNil(box.get(Credential.keychainKey))
+        XCTAssertTrue(store.hasLoaded) // no permanent first-load skeleton
+        XCTAssertNotNil(store.lastErrorMessage)
+    }
+
+    /// A transient (non-401) migration failure keeps the token staged for the next poll's retry.
+    func testLegacyMigrationTransientFailureKeepsToken() async throws {
+        struct Boom: Error {}
+        let url = try makeURL()
+        let fake = FakeGitHubAPI(error: Boom())
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let box = TokenBox()
+        store.storeToken = { token, key in box.set(token, key) }
+        store.deleteToken = { box.remove($0) }
+        store.tokenForAccount = { box.get($0.keychainKey) }
+        box.set("legacy-token", Credential.keychainKey)
+        store.pendingLegacyTokenForTests = "legacy-token"
+
+        await store.refresh()
+
+        XCTAssertEqual(store.pendingLegacyTokenForTests, "legacy-token")
+        XCTAssertTrue(store.isSignedIn)
+    }
+
+    // MARK: - Rate limiting
+
+    /// A rate-limited load records the reset time and surfaces the backoff message rather than a
+    /// generic failure, and doesn't flag the session expired.
+    func testRateLimitedLoadBacksOffAndSurfacesMessage() async throws {
+        let reset = Date().addingTimeInterval(300)
+        let fake = FakeGitHubAPI(error: GitHubClient.ClientError.rateLimited(until: reset))
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        let until = try XCTUnwrap(store.rateLimitedUntil)
+        XCTAssertEqual(until.timeIntervalSince1970, reset.timeIntervalSince1970, accuracy: 1)
+        XCTAssertEqual(store.lastErrorMessage, AuthErrorCopy.rateLimitMessage(until: reset))
+        XCTAssertFalse(store.sessionExpired)
+    }
+
+    /// When only the inbox is rate-limited, the sections that loaded still show — the limit only
+    /// drives the backoff and message.
+    func testPartialRateLimitKeepsLoadedSections() async throws {
+        let reset = Date().addingTimeInterval(120)
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = SearchIssue.stubs(count: 2)
+        fake.notificationsError = GitHubClient.ClientError.rateLimited(until: reset)
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        XCTAssertTrue(store.sections.contains { !$0.items.isEmpty })
+        XCTAssertNotNil(store.rateLimitedUntil)
+        XCTAssertFalse(store.sessionExpired)
+    }
+
+    /// A clean poll after a rate limit clears the backoff and its message.
+    func testRecoveredPollClearsRateLimit() async throws {
+        let reset = Date().addingTimeInterval(120)
+        let limited = FakeGitHubAPI(error: GitHubClient.ClientError.rateLimited(until: reset))
+        let store = try makeStore(api: limited)
+        await store.refresh()
+        XCTAssertNotNil(store.rateLimitedUntil)
+
+        store.makeAPI = { _, _ in FakeGitHubAPI() }
+        await store.refresh(force: true)
+
+        XCTAssertNil(store.rateLimitedUntil)
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
+    // MARK: - Notification mutator auth
+
+    /// A 401 marking one thread read flags the session expired (matching the quick-action path),
+    /// keeps the item, and offers a reconnect instead of a dead-end failure.
+    func testMarkReadUnauthorizedFlagsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1")]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        store.makeAPI = { _, _ in FakeGitHubAPI(error: GitHubClient.ClientError.http(401)) }
+        let target = try XCTUnwrap(store.notifications.first)
+        await store.markRead(target)
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.expiredAccount?.login, "octocat")
+        XCTAssertEqual(store.notifications.map(\.notification.id), ["1"])
+    }
+
+    /// A 401 from the bulk mark-all endpoint likewise flags the session expired and keeps the inbox.
+    func testMarkAllReadUnauthorizedFlagsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]
+        fake.actionError = GitHubClient.ClientError.http(401)
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        await store.markAllRead()
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.notifications.count, 2)
+    }
+
     // MARK: - Starred signal
 
     func testRefreshMergesStarredAndIsStarredIsCaseInsensitive() async throws {

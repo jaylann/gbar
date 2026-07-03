@@ -71,6 +71,10 @@ final class AppStore {
     var hasLoadedRepoFeeds = false
     var isRefreshing = false
     var lastErrorMessage: String?
+    /// When GitHub last rate-limited a load (from `Retry-After` / `X-RateLimit-Reset`), the time
+    /// access is expected back. The poll loop backs off until then instead of re-polling into
+    /// GitHub's secondary rate limit; `nil` when not rate-limited. Recomputed every refresh.
+    var rateLimitedUntil: Date?
     var sessionExpired = false
     /// The account whose token last returned a 401, if any — drives the per-account "Reconnect
     /// <login>" prompt (see `AppStore+Reauth`). `nil` when no session is expired. If several
@@ -480,8 +484,17 @@ extension AppStore {
     /// concurrently in a `TaskGroup`; the merged data is kept whole and the account filter is
     /// applied only in the view-facing projections, so switching accounts needs no refetch.
     private func performRefresh() async {
-        await migrateLegacyCredentialIfNeeded()
-        guard !accounts.isEmpty else { return }
+        let legacyExpired = await migrateLegacyCredentialIfNeeded()
+        guard !accounts.isEmpty else {
+            // A legacy token that was definitively rejected (401) is dropped in the migration, so
+            // `isSignedIn` falls to false and the UI shows the sign-in prompt rather than a
+            // permanent first-load skeleton. Surface why, and mark the first load complete.
+            if legacyExpired {
+                lastErrorMessage = "Your saved sign-in expired — please sign in again."
+            }
+            hasLoaded = true
+            return
+        }
         isRefreshing = true
         lastErrorMessage = nil
         // Clear both halves of the expired-session state together — leaving `expiredAccountID`
@@ -489,6 +502,7 @@ extension AppStore {
         // `applyErrorState` recomputes the pair.
         sessionExpired = false
         expiredAccountID = nil
+        rateLimitedUntil = nil
         defer { isRefreshing = false }
 
         // One API client per account (skipping any whose token has gone missing), reused for
@@ -528,12 +542,18 @@ extension AppStore {
         mergeStarred(loadsByAccount)
         applyErrorState(from: loadsByAccount)
 
+        kickOffHydration(accountAPIs: accountAPIs)
+        hasLoaded = true
+    }
+
+    /// Fire the non-blocking CI + per-repo-feed hydration waves, unless we're rate-limited — those
+    /// are an N+1 over the PR list, so skipping them while limited avoids digging the hole deeper
+    /// (the sections/notifications that already loaded still show; feeds rehydrate next poll).
+    private func kickOffHydration(accountAPIs: [(account: Account, api: GitHubAPI)]) {
+        if rateLimitedUntil.map({ $0 > Date() }) == true { return }
         let apis = Dictionary(uniqueKeysWithValues: accountAPIs.map { ($0.account.id, $0.api) })
-        // Kick off CI hydration and the per-repo feeds (Actions + Releases) without awaiting them,
-        // so the list shows immediately.
         hydrateChecks(for: sections, apis: apis)
         hydrateRepoFeeds(apis: apis)
-        hasLoaded = true
     }
 
     private func currentAccountAPIs() -> [(account: Account, api: GitHubAPI)] {
@@ -579,8 +599,12 @@ extension AppStore {
         let expired = accounts.first { loads[$0.id]?.sessionExpired == true }
         sessionExpired = expired != nil
         expiredAccountID = expired?.id
+        // Back off to the latest reset any account reported (nil clears a prior limit).
+        rateLimitedUntil = loads.values.compactMap(\.rateLimitedUntil).max()
         if expired != nil {
             lastErrorMessage = "Session expired — reconnect in Settings."
+        } else if let until = rateLimitedUntil {
+            lastErrorMessage = AuthErrorCopy.rateLimitMessage(until: until)
         } else {
             lastErrorMessage = loads.values.compactMap(\.errorMessage).first
         }
@@ -605,7 +629,14 @@ extension AppStore {
             notifications.removeAll { $0.id == item.id }
             lastErrorMessage = nil
         } catch {
-            lastErrorMessage = "Couldn't mark notification as read."
+            // A dead token here means the same thing as on a quick action — flag the account
+            // expired and prompt a reconnect rather than a generic, dead-end failure message.
+            if case .http(401) = error as? GitHubClient.ClientError {
+                markSessionExpired(accountID: item.account.id)
+                lastErrorMessage = "Session expired — reconnect in Settings."
+            } else {
+                lastErrorMessage = "Couldn't mark notification as read."
+            }
             Log.network.error("mark notification read failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -758,8 +789,12 @@ extension AppStore {
     /// pending token is cleared) and non-destructive: on failure the legacy token is left in
     /// place so a later refresh can retry. Device flow has no refresh token, so we don't know
     /// the original `kind` — default to `.oauth` (the common case).
-    func migrateLegacyCredentialIfNeeded() async {
-        guard let token = pendingLegacyToken else { return }
+    /// Returns `true` when a pending legacy token was *definitively rejected* (a 401) — the caller
+    /// uses that to surface an actionable sign-in state instead of retrying a dead token forever.
+    /// A transient failure (network/5xx) returns `false` and leaves the token staged for retry.
+    @discardableResult
+    func migrateLegacyCredentialIfNeeded() async -> Bool {
+        guard let token = pendingLegacyToken else { return false }
         let api = makeAPI(apiBaseURL, token)
         do {
             let user = try await api.currentUser()
@@ -771,37 +806,18 @@ extension AppStore {
             deleteToken(Credential.keychainKey)
             pendingLegacyToken = nil
             Log.auth.info("migrated legacy token to account \(account.login, privacy: .public)")
+            return false
         } catch {
             Log.auth.error("legacy token migration failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    /// Start (or restart) the background poll loop. Cancels any existing loop first; a no-op
-    /// when signed out or when polling is `.off`.
-    func startPolling() {
-        pollTask?.cancel()
-        guard isSignedIn, pollInterval > 0 else {
-            pollTask = nil
-            return
-        }
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                guard let self, self.isSignedIn, self.pollInterval > 0 else { return }
-                // `refresh()` is single-flight, so a menu-triggered or manual refresh already in
-                // flight coalesces here rather than racing this poll tick. See #10.
-                await self.refresh()
-                let seconds = self.pollInterval
-                do {
-                    try await Task.sleep(for: .seconds(seconds))
-                } catch {
-                    return // cancelled
-                }
+            // A rejected token can never succeed on retry, and silently re-attempting it every poll
+            // leaves the app stuck showing a first-load skeleton (isSignedIn stays true with no
+            // account, hasLoaded never flips). Drop it so the sign-in prompt can take over.
+            if case .http(401) = error as? GitHubClient.ClientError {
+                deleteToken(Credential.keychainKey)
+                pendingLegacyToken = nil
+                return true
             }
+            return false
         }
-    }
-
-    private func stopPolling() {
-        pollTask?.cancel()
-        pollTask = nil
     }
 }
