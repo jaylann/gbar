@@ -243,6 +243,12 @@ struct GitHubClient: GitHubAPI {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        // GitHub sends `Cache-Control: private, max-age=60` on these endpoints, so URLSession's
+        // default policy serves a ≤60s-old cached body — after an approve/merge the re-fetched PR
+        // detail and reviews come back stale (`mergeable_state` still "blocked", the new review
+        // missing), so the Approve/Merge buttons don't update until the entry expires. The app is a
+        // live dashboard; always read through to origin so a just-mutated PR reflects its new state.
+        request.cachePolicy = .reloadIgnoringLocalCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
