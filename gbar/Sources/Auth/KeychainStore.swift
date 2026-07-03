@@ -34,7 +34,7 @@ enum KeychainStore {
 
     static func get(_ key: String) -> String? {
         var item: CFTypeRef?
-        let status = withKeychain { useDataProtection in
+        let status = withKeychain(retryingNotFound: true) { useDataProtection in
             var query = baseQuery(for: key, useDataProtection: useDataProtection)
             query[kSecReturnData as String] = true
             query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -64,12 +64,27 @@ enum KeychainStore {
         ]
     }
 
+    /// Whether a failed data-protection op should retry against the file keychain.
+    /// `errSecMissingEntitlement` always retries (teamless build, no access group). Reads also
+    /// retry on `errSecItemNotFound` so a value written via the file-keychain fallback (#53) is
+    /// still found when the data-protection query answers "not found". Writes must NOT retry on
+    /// not-found — an `SecItemAdd` returning not-found never means "the item is elsewhere".
+    static func shouldRetryOnFileKeychain(_ status: OSStatus, retryingNotFound: Bool) -> Bool {
+        status == errSecMissingEntitlement || (retryingNotFound && status == errSecItemNotFound)
+    }
+
     /// Runs `op` against the data-protection keychain first; if the build carries no
     /// access-group entitlement (teamless ad-hoc → `errSecMissingEntitlement`), retries the
-    /// same op against the file-based keychain so self-host builds keep working.
-    private static func withKeychain(_ op: (_ useDataProtection: Bool) -> OSStatus) -> OSStatus {
+    /// same op against the file-based keychain so self-host builds keep working. Reads pass
+    /// `retryingNotFound: true` so an `errSecItemNotFound` from the data-protection query also
+    /// retries the file keychain — otherwise a token written via the fallback reads back nil (#53).
+    private static func withKeychain(
+        retryingNotFound: Bool = false,
+        _ op: (_ useDataProtection: Bool) -> OSStatus
+    )
+    -> OSStatus {
         let status = op(true)
-        guard status == errSecMissingEntitlement else { return status }
+        guard shouldRetryOnFileKeychain(status, retryingNotFound: retryingNotFound) else { return status }
         return op(false)
     }
 }
