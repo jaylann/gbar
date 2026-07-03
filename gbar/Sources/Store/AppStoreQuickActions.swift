@@ -4,9 +4,12 @@ import Foundation
 
 extension AppStore {
     /// Approve a pull request via its own account's client, optionally attaching a review
-    /// message. On success we re-hydrate just this PR's gate so the Approve button disappears and
-    /// a now-merge-ready PR surfaces its Merge button immediately, rather than waiting for the
-    /// next poll. An empty/whitespace-only message is sent as no body (plain approval).
+    /// message. On success we re-hydrate just this PR's gate so the Approve button disappears
+    /// immediately (the viewer's review is strongly consistent). Merge, though, is gated on
+    /// `mergeable_state`, which GitHub recomputes asynchronously — so if it isn't already unblocked
+    /// we hand off to a background poll (`startMergeReadinessPoll`) that reveals Merge once the
+    /// recompute lands, rather than blocking this call (and the inline composer) on it. An
+    /// empty/whitespace-only message is sent as no body (plain approval).
     func approve(_ item: AccountItem, message: String? = nil) async {
         guard let token = tokenForAccount(item.account) else { return }
         let api = makeAPI(item.account.apiBaseURL, token)
@@ -16,7 +19,10 @@ extension AppStore {
         do {
             try await api.approvePullRequest(repo: issue.repositorySlug, number: issue.number, body: body)
             lastErrorMessage = nil
-            await refreshPRState(for: item, using: api)
+            let gate = await refreshPRState(for: item, using: api)
+            if gate?.mergeable != true {
+                startMergeReadinessPoll(for: item, using: api)
+            }
         } catch {
             handleActionError(
                 error,
