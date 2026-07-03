@@ -475,6 +475,8 @@ extension RepositoryInfo {
     /// repo's enabled merge strategies (default all three, matching a typical repo).
     static func stub(
         push: Bool,
+        maintain: Bool = false,
+        admin: Bool = false,
         allowMerge: Bool = true,
         allowSquash: Bool = true,
         allowRebase: Bool = true
@@ -482,7 +484,7 @@ extension RepositoryInfo {
     -> RepositoryInfo {
         let json = """
         {
-          "permissions": { "push": \(push), "maintain": false, "admin": false },
+          "permissions": { "push": \(push), "maintain": \(maintain), "admin": \(admin) },
           "allow_merge_commit": \(allowMerge),
           "allow_squash_merge": \(allowSquash),
           "allow_rebase_merge": \(allowRebase)

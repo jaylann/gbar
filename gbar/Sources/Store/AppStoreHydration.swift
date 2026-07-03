@@ -79,6 +79,10 @@ extension AppStore {
     func startMergeReadinessPoll(for item: AccountItem, using api: GitHubAPI) {
         mergeReadinessTask?.cancel()
         mergeReadinessTask = Task { [weak self] in
+            // Drop our own reference on normal completion so a finished poll doesn't linger
+            // (matching `checksTask`/`repoFeedsTask`). If we were cancelled, a newer poll already
+            // owns `mergeReadinessTask`, so leave it be.
+            defer { if !Task.isCancelled { self?.mergeReadinessTask = nil } }
             for delay in Self.approveRefreshRetryDelays {
                 await self?.sleep(delay)
                 guard let self, !Task.isCancelled, self.isSignedIn else { return }

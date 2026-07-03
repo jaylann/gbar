@@ -431,27 +431,6 @@ final class AppStore {
     #endif
 }
 
-#if DEBUG
-extension AppStore {
-    /// Test hook: await the current CI hydration wave (if any) to completion.
-    func awaitChecksHydration() async {
-        await checksTask?.value
-    }
-
-    /// Test hook: hand back the in-flight hydration task so a test can hold a reference across
-    /// a sign-out (which nils the store's own reference) and still await the wave.
-    var checksHydrationTaskForTests: Task<Void, Never>? {
-        checksTask
-    }
-
-    /// Test hook: seed/inspect the pending legacy token so migration can be driven in a test.
-    var pendingLegacyTokenForTests: String? {
-        get { pendingLegacyToken }
-        set { pendingLegacyToken = newValue }
-    }
-}
-#endif
-
 // MARK: - Refresh
 
 extension AppStore {
@@ -463,12 +442,20 @@ extension AppStore {
     /// fresh token). Force supersedes the in-flight run — cancels it and starts a fresh one —
     /// rather than coalescing onto a result computed from the old token.
     func refresh(force: Bool = false) async {
-        if let refreshTask {
+        if let existing = refreshTask {
             // Force supersedes the stale run (cancel + let it unwind — it drops its writes on
             // `Task.isCancelled`); otherwise coalesce onto it and return.
-            if force { refreshTask.cancel() }
-            await refreshTask.value
+            if force { existing.cancel() }
+            await existing.value
             if !force { return }
+            // Two concurrent `force` callers both awaited `existing`; the main actor resumes them
+            // one at a time, so by the time this one runs a peer may have already installed a fresh
+            // run (there's no suspension between its resume and its `refreshTask = task`). Coalesce
+            // onto that run rather than starting a third overlapping wave.
+            if let current = refreshTask, current != existing {
+                await current.value
+                return
+            }
         }
         let task = Task { [weak self] in
             guard let self else { return }
@@ -750,6 +737,7 @@ extension AppStore {
         checksTask?.cancel()
         checksTask = nil
         mergeReadinessTask?.cancel() // its loop also bails on the now-false `isSignedIn`
+        mergeReadinessTask = nil
         checksGeneration += 1
         repoFeedsTask?.cancel()
         repoFeedsTask = nil

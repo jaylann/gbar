@@ -58,6 +58,18 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
+    func testHTTPBaseURLRejectedAsBadURL() async throws {
+        // A misconfigured cleartext host must never send the bearer token over http.
+        let baseURL = try XCTUnwrap(URL(string: "http://ghe.internal/api/v3"))
+        let client = GitHubClient(baseURL: baseURL, token: "test-token", session: makeSession())
+        do {
+            _ = try await client.searchIssues("is:open")
+            XCTFail("Expected an http base URL to be rejected")
+        } catch let error as GitHubClient.ClientError {
+            XCTAssertEqual(error, .badURL)
+        }
+    }
+
     func testSearchIssuesDecodesItems() async throws {
         MockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)

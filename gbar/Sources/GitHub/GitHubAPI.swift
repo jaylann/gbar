@@ -240,8 +240,39 @@ struct GitHubClient: GitHubAPI {
     /// A JSON decoder configured the way every GitHub response expects.
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            guard let date = parseISO8601(string) else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Invalid ISO8601 date: \(string)"
+                )
+            }
+            return date
+        }
         return decoder
+    }()
+
+    /// GitHub currently emits second-precision `Z` timestamps, but an endpoint or GHE version can
+    /// send fractional seconds (`…:05.123Z`). Accept both so one such field can't fail the entire
+    /// page decode (which the plain `.iso8601` strategy would).
+    private static func parseISO8601(_ string: String) -> Date? {
+        isoFractional.date(from: string) ?? isoPlain.date(from: string)
+    }
+
+    /// `ISO8601DateFormatter` parsing is thread-safe; `nonisolated(unsafe)` lets these be shared
+    /// statics under strict concurrency without per-decode allocation.
+    private nonisolated(unsafe) static let isoFractional: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private nonisolated(unsafe) static let isoPlain: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter
     }()
 
     /// A shared JSON encoder for request bodies — cheaper than allocating one per request.
@@ -264,6 +295,9 @@ struct GitHubClient: GitHubAPI {
         }
         components.queryItems = queryItems
         guard let url = components.url else { throw ClientError.badURL }
+        // Never send the bearer token over cleartext: reject a non-https base URL (e.g. a
+        // misconfigured Enterprise host pasted as `http://…`) rather than leaking credentials.
+        guard url.scheme?.lowercased() == "https" else { throw ClientError.badURL }
 
         var request = URLRequest(url: url)
         request.httpMethod = method

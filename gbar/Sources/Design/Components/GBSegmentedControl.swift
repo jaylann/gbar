@@ -60,6 +60,8 @@ struct GBSegmentedControl<Tag: Hashable>: View {
             }
         }
         .buttonStyle(.plain)
+        // Mark the active segment for VoiceOver — otherwise every segment reads as a plain button.
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 }
 

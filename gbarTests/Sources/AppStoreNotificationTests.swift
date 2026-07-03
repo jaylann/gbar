@@ -280,6 +280,34 @@ final class AppStoreNotificationTests: XCTestCase {
         XCTAssertTrue(spy.posts[0].body.contains("#7"))
     }
 
+    /// The recovery direction: a PR whose CI was failing turns green — expect a "CI passed" banner
+    /// (the success path, distinct from the failure one above).
+    func testCheckStatusRecoveryNotifiesPassed() async throws {
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 200, number: 12)]
+        seed.pullRequestResult = .stub(number: 12, headSHA: "cafef00d")
+        seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "failure")]
+        let store = try makeStore(api: seed)
+        let spy = SpyNotifier()
+        store.notifier = spy
+
+        await store.refresh() // seed: first observation (failing) stays quiet
+        await store.awaitChecksHydration()
+        XCTAssertTrue(spy.posts.isEmpty)
+
+        var next = FakeGitHubAPI()
+        next.defaultResult = [SearchIssue.stub(id: 200, number: 12)]
+        next.pullRequestResult = .stub(number: 12, headSHA: "cafef00d")
+        next.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        store.makeAPI = { [next] _, _ in next }
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        XCTAssertEqual(spy.posts.count, 1)
+        XCTAssertEqual(spy.posts[0].title, "CI passed")
+        XCTAssertTrue(spy.posts[0].body.contains("#12"))
+    }
+
     // MARK: - Bug regressions
 
     /// Bug #1: a first poll that fails entirely must NOT seed the baseline. The first *successful*

@@ -131,7 +131,9 @@ extension NotificationService: UNUserNotificationCenterDelegate {
     ) {
         let urlString = response.notification.request.content.userInfo[Self.urlKey] as? String
         completionHandler()
-        guard let urlString, let url = URL(string: urlString) else { return }
+        // Only ever hand an http(s) link to NSWorkspace — a hostile host must not be able to open
+        // a local file or launch an app via a `file:`/custom-scheme deep link.
+        guard let url = WebLink.parse(urlString) else { return }
         Task { @MainActor in
             NSWorkspace.shared.open(url)
         }

@@ -16,7 +16,10 @@ struct UnseenDot: View {
             .frame(width: diameter, height: diameter)
             .opacity(isUnseen ? 1 : 0)
             .animation(Motion.respecting(reduceMotion, Motion.fade), value: isUnseen)
-            .accessibilityLabel(isUnseen ? "Unseen" : "")
+            // Hide the decorative dot from VoiceOver entirely when seen — an empty label would
+            // still leave an (unlabeled) element in the a11y tree.
+            .accessibilityLabel(Text("Unseen"))
+            .accessibilityHidden(!isUnseen)
     }
 }
 

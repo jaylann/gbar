@@ -7,9 +7,9 @@ import XCTest
 /// resulting account is validated against `FakeGitHubAPI.currentUser`.
 @MainActor
 final class AppStoreAddAccountTests: XCTestCase {
-    private func makeStore(api: FakeGitHubAPI) throws -> (AppStore, TokenBox) {
+    private func makeStore(api: FakeGitHubAPI, accounts: [Account] = []) throws -> (AppStore, TokenBox) {
         let url = try XCTUnwrap(URL(string: "https://api.github.com"))
-        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in api })
+        let store = AppStore(apiBaseURL: url, accounts: accounts, makeAPI: { _, _ in api })
         let box = TokenBox()
         store.storeToken = { token, key in box.set(token, key) }
         store.tokenForAccount = { box.get($0.keychainKey) }
@@ -117,6 +117,103 @@ final class AppStoreAddAccountTests: XCTestCase {
 
         XCTAssertTrue(store.accounts.isEmpty)
         XCTAssertFalse(store.isSignedIn)
+    }
+
+    // MARK: - addAccount validation
+
+    func testAddAccountInvalidTokenThrowsAndStoresNothing() async throws {
+        let fake = FakeGitHubAPI(error: GitHubClient.ClientError.http(401))
+        let (store, _) = try makeStore(api: fake)
+        do {
+            try await store.addAccount(
+                token: "bad",
+                kind: .personalAccessToken,
+                apiBaseURL: XCTUnwrap(URL(string: "https://api.github.com"))
+            )
+            XCTFail("Expected an invalid token to throw")
+        } catch {}
+        // currentUser() fails before storeToken, so nothing is connected or persisted.
+        XCTAssertTrue(store.accounts.isEmpty)
+        XCTAssertFalse(store.isSignedIn)
+    }
+
+    func testAddAccountDuplicateLoginReplacesInPlace() async throws {
+        var fake = FakeGitHubAPI()
+        fake.currentUserResult = GitHubUser(login: "dup", avatarURL: nil)
+        let (store, box) = try makeStore(api: fake)
+        let url = try XCTUnwrap(URL(string: "https://api.github.com"))
+
+        try await store.addAccount(token: "t1", kind: .personalAccessToken, apiBaseURL: url)
+        try await store.addAccount(token: "t2", kind: .oauth, apiBaseURL: url)
+
+        // Same login+host → same account id → replaced in place, newer metadata + token win.
+        XCTAssertEqual(store.accounts.count, 1)
+        let account = try XCTUnwrap(store.accounts.first)
+        XCTAssertEqual(account.kind, .oauth)
+        XCTAssertEqual(box.get(account.keychainKey), "t2")
+    }
+
+    // MARK: - In-place 401 reconnect
+
+    private func expiredOAuthStore() throws -> (AppStore, TokenBox, Account) {
+        var fake = FakeGitHubAPI()
+        fake.currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
+        let url = try XCTUnwrap(URL(string: "https://api.github.com"))
+        let account = Account(login: "octocat", avatarURL: nil, kind: .oauth, apiBaseURL: url)
+        let (store, box) = try makeStore(api: fake, accounts: [account])
+        box.set("old-token", account.keychainKey)
+        store.oauthClientID = "client-id"
+        store.markSessionExpired(accountID: account.id)
+        return (store, box, account)
+    }
+
+    func testReconnectReplacesTokenInPlaceAndClearsExpiry() async throws {
+        let (store, box, account) = try expiredOAuthStore()
+        stubDeviceFlowSuccess(token: "gho_reconnected")
+        XCTAssertTrue(store.canReconnect)
+
+        await store.reconnect(openURL: { _ in })
+
+        // Same keychain slot → identity preserved; expiry cleared; status back to idle.
+        XCTAssertEqual(box.get(account.keychainKey), "gho_reconnected")
+        XCTAssertEqual(store.reauthStatus, .idle)
+        XCTAssertFalse(store.sessionExpired)
+        XCTAssertNil(store.expiredAccountID)
+    }
+
+    func testReconnectReentrancyGuardIgnoresSecondCall() async throws {
+        let (store, _, _) = try expiredOAuthStore()
+        store.reauthStatus = .starting // a reconnect is already in flight
+        let handed = HandedCodeBox()
+        // No MockURLProtocol handler installed: had the guard failed, the flow would hit the network.
+        await store.reconnect(openURL: { handed.openedURL = $0 })
+
+        XCTAssertNil(handed.openedURL)
+        XCTAssertEqual(store.reauthStatus, .starting)
+    }
+
+    func testReconnectFailureSetsFailedStatusAndKeepsExpiry() async throws {
+        let (store, box, account) = try expiredOAuthStore()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let json = url.path.hasSuffix("/login/device/code")
+                ? #"{"device_code":"d","user_code":"AB-12","verification_uri":"https://github.com/login/device","interval":0,"expires_in":30}"#
+                : #"{"error":"access_denied"}"#
+            return (response, Data(json.utf8))
+        }
+
+        await store.reconnect(openURL: { _ in })
+
+        if case .failed = store.reauthStatus {} else {
+            XCTFail("Expected .failed, got \(store.reauthStatus)")
+        }
+        // The old token is untouched and the account stays expired for another attempt.
+        XCTAssertEqual(box.get(account.keychainKey), "old-token")
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.expiredAccountID, account.id)
     }
 
     func testPATPathValidatesTokenViaCurrentUser() async throws {

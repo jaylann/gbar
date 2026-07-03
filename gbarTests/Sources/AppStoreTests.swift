@@ -514,6 +514,22 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(gate.mergeable) // you can still merge your own PR
     }
 
+    /// A maintainer (or admin) without the `push` bit can still merge — the gate signal is
+    /// `push || maintain || admin`, so a maintainer-only repo must not hide Merge.
+    func testRefreshGateMaintainerWithoutPushCanMerge() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 103, number: 11)]
+        fake.pullRequestResult = .stub(number: 11, mergeableState: "clean")
+        fake.repositoryResult = .stub(push: false, maintain: true) // maintainer, no push
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        try await waitUntil { store.prGates[self.key(103)] != nil }
+
+        let gate = try XCTUnwrap(store.prGates[key(103)])
+        XCTAssertTrue(gate.mergeable)
+    }
+
     /// Polls `condition` on the main actor until true or the timeout elapses.
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async throws {
         let deadline = Date().addingTimeInterval(timeout)
@@ -1103,6 +1119,12 @@ final class AppStoreTests: XCTestCase {
         // Interior whitespace is a typo, not a repo path.
         XCTAssertNil(AppStore.normalizedSlug("own er/repo"))
         XCTAssertNil(AppStore.normalizedSlug("owner/ "))
+        // Path-traversal segments are rejected so a slug can't rewrite the request path.
+        XCTAssertNil(AppStore.normalizedSlug("../foo"))
+        XCTAssertNil(AppStore.normalizedSlug("owner/.."))
+        XCTAssertNil(AppStore.normalizedSlug("owner/re/../po"))
+        // A repo name containing dots (but not a bare `..`) is still valid.
+        XCTAssertEqual(AppStore.normalizedSlug("owner/repo.js"), "owner/repo.js")
     }
 
     // MARK: - Repo feeds hydration
