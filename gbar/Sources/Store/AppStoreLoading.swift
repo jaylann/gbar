@@ -84,12 +84,14 @@ extension AppStore {
     /// and derive the action gate. Never throws — a failed detail fetch yields an empty
     /// `PRState` so the row stays optimistic (buttons show as they did before hydration).
     /// `mergeInfo` is the viewer's repo merge signals (push access + allowed strategies), or
-    /// nil when not yet hydrated.
+    /// nil when not yet hydrated. Set `includeChecks: false` for a gate-only refresh (e.g. after
+    /// an approval, where CI can't have changed) to skip the extra check-runs request.
     nonisolated static func fetchPRState(
         for item: SearchIssue,
         login: String,
         mergeInfo: RepoMergeInfo?,
-        using api: GitHubAPI
+        using api: GitHubAPI,
+        includeChecks: Bool = true
     ) async
     -> PRState {
         let repo = item.repositorySlug
@@ -97,7 +99,7 @@ extension AppStore {
             Log.network.debug("pr detail skip #\(item.number, privacy: .public)")
             return PRState(checks: nil, gate: nil)
         }
-        let checks = await fetchChecks(repo: repo, detail: detail, using: api)
+        let checks = includeChecks ? await fetchChecks(repo: repo, detail: detail, using: api) : nil
         // `alreadyApproved` is irrelevant for the viewer's own PRs (Approve is hidden
         // synchronously in the row anyway), so skip the reviews call for them — it saves a
         // request per own-PR per poll, which matters against GitHub's hourly rate limit.

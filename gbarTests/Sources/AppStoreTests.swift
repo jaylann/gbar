@@ -127,6 +127,41 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    /// After a successful approve, the PR's gate must update immediately — Approve hidden,
+    /// Merge shown — without a full section refresh. A prior `refresh()` seeds `repoMergeInfo`,
+    /// so `mergeable` here reflects *verified* push access (push: true), not the optimistic
+    /// pre-hydration fallback. The stub PR is authored by `jaylann` while the account is
+    /// `octocat`, so it's not the viewer's own PR and reviews are consulted.
+    func testApproveRefreshesGateImmediately() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 1, number: 42)]
+        fake.pullRequestResult = .stub(number: 42, mergeableState: "clean")
+        fake.repositoryResult = .stub(push: true)
+        fake.reviewsResult = [] // viewer hasn't approved yet
+        let store = try makeStore(api: fake) // account login = octocat
+
+        // Seed the gate + repo merge info via a real wave, so the later re-hydration exercises
+        // the verified push-access path rather than the optimistic nil-mergeInfo fallback.
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 42 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.alreadyApproved, false)
+        let searchesBeforeApprove = fake.recorder.searchCount
+
+        // The viewer approves; the follow-up client now reports their APPROVED review.
+        var approvedFake = fake
+        approvedFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let approved = approvedFake
+        store.makeAPI = { _, _ in approved }
+        await store.approve(pr)
+
+        // The gate re-hydrated inline — approve fired no extra section search.
+        XCTAssertEqual(fake.recorder.searchCount, searchesBeforeApprove)
+        let gate = try XCTUnwrap(store.gate(for: pr))
+        XCTAssertTrue(gate.alreadyApproved) // Approve button now hidden
+        XCTAssertTrue(gate.mergeable) // verified push access → Merge shown
+    }
+
     func testMergeRecordsCallAndRemovesItemOptimistically() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = SearchIssue.stubs(count: 2) // ids/numbers 0 and 1

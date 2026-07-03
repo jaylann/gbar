@@ -4,8 +4,9 @@ import Foundation
 
 extension AppStore {
     /// Approve a pull request via its own account's client, optionally attaching a review
-    /// message. Approval doesn't change which lists the PR belongs to, so on success we just
-    /// clear a stale error. An empty/whitespace-only message is sent as no body (plain approval).
+    /// message. On success we re-hydrate just this PR's gate so the Approve button disappears and
+    /// a now-merge-ready PR surfaces its Merge button immediately, rather than waiting for the
+    /// next poll. An empty/whitespace-only message is sent as no body (plain approval).
     func approve(_ item: AccountItem, message: String? = nil) async {
         guard let token = tokenForAccount(item.account) else { return }
         let api = makeAPI(item.account.apiBaseURL, token)
@@ -15,6 +16,7 @@ extension AppStore {
         do {
             try await api.approvePullRequest(repo: issue.repositorySlug, number: issue.number, body: body)
             lastErrorMessage = nil
+            await refreshPRState(for: item, using: api)
         } catch {
             handleActionError(
                 error,
