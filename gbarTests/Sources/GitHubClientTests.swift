@@ -369,6 +369,37 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(first.name, "Inbox & quick actions")
         XCTAssertFalse(first.prerelease)
     }
+
+    /// GitHub sends `Cache-Control: private, max-age=60` on PR endpoints, so the default cache
+    /// policy would serve a stale body right after an approve/merge (the whole "Merge won't unlock"
+    /// bug). Requests must opt out of the local cache so a just-mutated PR reads through to origin.
+    func testRequestsBypassLocalHTTPCache() async throws {
+        let box = HeaderBox()
+        MockURLProtocol.handler = { request in
+            box.cachePolicy = request.cachePolicy
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(HTTPURLResponse(
+                url: url, statusCode: 200,
+                httpVersion: nil, headerFields: ["Cache-Control": "private, max-age=60"]
+            ))
+            let body = """
+            {
+              "id": 42, "number": 42, "title": "PR", "state": "open",
+              "html_url": "https://github.com/octo/repo/pull/42", "merged": false,
+              "mergeable": true, "mergeable_state": "clean", "draft": false,
+              "user": { "login": "jaylann", "avatar_url": null },
+              "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+              "head": { "sha": "abc", "ref": "feature" }
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        _ = try await client.pullRequest(repo: "octo/repo", number: 42)
+
+        XCTAssertEqual(box.cachePolicy, .reloadIgnoringLocalCacheData)
+    }
 }
 
 /// Records the `page` query values a paginated request walks through, in order.
@@ -389,4 +420,5 @@ private final class HeaderBox: @unchecked Sendable {
     var headers: [String: String]?
     var path: String?
     var method: String?
+    var cachePolicy: URLRequest.CachePolicy?
 }
