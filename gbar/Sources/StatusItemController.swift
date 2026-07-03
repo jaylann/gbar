@@ -80,12 +80,16 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
     }
 
     private func updateButton() {
-        // Read the tracked value first so `withObservationTracking` always registers the
-        // dependency, even on a (currently unreachable) early return below.
+        // Read the tracked values first so `withObservationTracking` always registers both
+        // dependencies, even on a (currently unreachable) early return below.
         let count = store.badgeCount
+        let tooltip = store.badgeTooltip
         guard let button = statusItem?.button else { return }
-        button.image = NSImage(systemSymbolName: Self.symbolName, accessibilityDescription: "gbar")
+        // The bare number is cryptic on its own, so the hover tooltip (and VoiceOver label)
+        // spell out what it counts — e.g. "12 PRs awaiting your review".
+        button.image = NSImage(systemSymbolName: Self.symbolName, accessibilityDescription: tooltip)
         button.title = count > 0 ? " \(count)" : ""
+        button.toolTip = tooltip
     }
 
     // MARK: Clicks

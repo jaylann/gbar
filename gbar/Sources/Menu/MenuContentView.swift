@@ -255,12 +255,16 @@ struct MenuContentView: View {
                 .padding(.vertical, Theme.Spacing.xs)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
+            // Only the visible tab filters against the live query; hidden tabs (kept alive by the
+            // keep-alive pager, #61) get an empty query so their `matchesSearch` short-circuits and
+            // their row identities stay stable across keystrokes — no wasted scans on 4/5 tabs (#62).
+            let query = tab == selectedTab ? trimmedSearch : ""
             switch tab {
-            case .prs: prList
-            case .issues: issueList
-            case .notifications: notificationList
-            case .actions: actionList
-            case .releases: releaseList
+            case .prs: prList(query: query)
+            case .issues: issueList(query: query)
+            case .notifications: notificationList(query: query)
+            case .actions: actionList(query: query)
+            case .releases: releaseList(query: query)
             }
         }
     }
@@ -282,9 +286,9 @@ struct MenuContentView: View {
         store.hasLoaded && !store.sessionExpired && !storeIsEmpty
     }
 
-    private var prList: some View {
+    private func prList(query: String) -> some View {
         let groups = filteredSections(store.prSections) {
-            matchesSearch($0.item.issue) && prPredicate($0) && starredPredicate($0.item)
+            matchesSearch($0.item.issue, query: query) && prPredicate($0) && starredPredicate($0.item)
         }
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No pull requests", caughtUpMessage: "Nothing needs you right now.")
@@ -300,9 +304,9 @@ struct MenuContentView: View {
         }
     }
 
-    private var issueList: some View {
+    private func issueList(query: String) -> some View {
         let groups = filteredSections(store.issueSections) {
-            matchesSearch($0.item.issue) && starredPredicate($0.item)
+            matchesSearch($0.item.issue, query: query) && starredPredicate($0.item)
         }
         return tabScaffold(isEmpty: groups.isEmpty) {
             emptyState(caughtUpTitle: "No issues", caughtUpMessage: "No issues assigned to you.")
@@ -318,9 +322,9 @@ struct MenuContentView: View {
         }
     }
 
-    private var notificationList: some View {
+    private func notificationList(query: String) -> some View {
         let items = store.visibleNotifications.filter {
-            matchesSearch($0.notification)
+            matchesSearch($0.notification, query: query)
                 && inboxReason.matches($0.notification.reason)
                 && (!starredOnly || store.isStarred($0))
         }
@@ -467,33 +471,33 @@ extension MenuContentView {
         !starredOnly || store.isStarred(item)
     }
 
-    private func matchesSearch(_ item: SearchIssue) -> Bool {
-        guard !trimmedSearch.isEmpty else { return true }
-        return item.title.localizedCaseInsensitiveContains(trimmedSearch)
-            || item.repositorySlug.localizedCaseInsensitiveContains(trimmedSearch)
+    private func matchesSearch(_ item: SearchIssue, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        return item.title.localizedCaseInsensitiveContains(query)
+            || item.repositorySlug.localizedCaseInsensitiveContains(query)
     }
 
-    private func matchesSearch(_ notification: GitHubNotification) -> Bool {
-        guard !trimmedSearch.isEmpty else { return true }
-        return notification.subject.title.localizedCaseInsensitiveContains(trimmedSearch)
-            || notification.repository.fullName.localizedCaseInsensitiveContains(trimmedSearch)
+    private func matchesSearch(_ notification: GitHubNotification, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
+        return notification.subject.title.localizedCaseInsensitiveContains(query)
+            || notification.repository.fullName.localizedCaseInsensitiveContains(query)
     }
 
-    private func matchesSearch(_ item: AccountActionRun) -> Bool {
-        guard !trimmedSearch.isEmpty else { return true }
+    private func matchesSearch(_ item: AccountActionRun, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
         let run = item.run
-        return item.repo.localizedCaseInsensitiveContains(trimmedSearch)
-            || run.name.localizedCaseInsensitiveContains(trimmedSearch)
-            || (run.displayTitle?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
-            || (run.headBranch?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
+        return item.repo.localizedCaseInsensitiveContains(query)
+            || run.name.localizedCaseInsensitiveContains(query)
+            || (run.displayTitle?.localizedCaseInsensitiveContains(query) ?? false)
+            || (run.headBranch?.localizedCaseInsensitiveContains(query) ?? false)
     }
 
-    private func matchesSearch(_ item: AccountRelease) -> Bool {
-        guard !trimmedSearch.isEmpty else { return true }
+    private func matchesSearch(_ item: AccountRelease, query: String) -> Bool {
+        guard !query.isEmpty else { return true }
         let release = item.release
-        return item.repo.localizedCaseInsensitiveContains(trimmedSearch)
-            || release.tagName.localizedCaseInsensitiveContains(trimmedSearch)
-            || (release.name?.localizedCaseInsensitiveContains(trimmedSearch) ?? false)
+        return item.repo.localizedCaseInsensitiveContains(query)
+            || release.tagName.localizedCaseInsensitiveContains(query)
+            || (release.name?.localizedCaseInsensitiveContains(query) ?? false)
     }
 
     private func prPredicate(_ entry: (section: LoadedSection, item: AccountItem)) -> Bool {
@@ -580,9 +584,9 @@ extension MenuContentView {
 /// The Actions and Releases tabs — the per-repo feeds over the watchlist. Split into their own
 /// extension so the primary view body stays within the type-length limit.
 extension MenuContentView {
-    var actionList: some View {
+    func actionList(query: String) -> some View {
         let items = store.visibleActionRuns.filter {
-            matchesSearch($0) && (!starredOnly || store.isStarred($0))
+            matchesSearch($0, query: query) && (!starredOnly || store.isStarred($0))
         }
         return tabScaffold(isEmpty: items.isEmpty) {
             repoFeedEmptyState(
@@ -598,9 +602,9 @@ extension MenuContentView {
         }
     }
 
-    var releaseList: some View {
+    func releaseList(query: String) -> some View {
         let items = store.visibleReleases.filter {
-            matchesSearch($0) && (!starredOnly || store.isStarred($0))
+            matchesSearch($0, query: query) && (!starredOnly || store.isStarred($0))
         }
         return tabScaffold(isEmpty: items.isEmpty) {
             repoFeedEmptyState(caughtUpTitle: "No releases yet", caughtUpMessage: "No releases in your watched repos.")

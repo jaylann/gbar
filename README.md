@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#features">Features</a> ·
-  <a href="#gbar-vs-pullbar">vs. PullBar</a> ·
   <a href="#install">Install</a> ·
   <a href="#build-from-source">Build</a> ·
   <a href="#authentication">Auth</a> ·
@@ -31,10 +30,9 @@
 ---
 
 **gbar** puts everything you track on GitHub — pull requests, issues, CI status,
-notifications and quick actions — into your macOS menu bar, one glance away. It's like
-[PullBar](https://github.com/menubar-apps/PullBar), but broader: a *general* GitHub bar,
-not a PR-only viewer. Free to run, self-host and modify; source-available under PolyForm
-Shield.
+notifications and quick actions — into your macOS menu bar, one glance away. A *general*
+GitHub bar, not just a PR list. Free to run, self-host and modify; source-available under
+PolyForm Shield.
 
 ## Why gbar
 
@@ -43,7 +41,7 @@ Shield.
 - **Broader than PRs.** Issues, checks, notifications, starred repos, a per-repo
   watchlist and arbitrary saved searches — not just an assigned-PR list.
 - **Yours to run.** OAuth device flow or a PAT, tokens in the Keychain, no backend.
-  Self-host free, or pay for a pre-configured build. Source-available, no lock-in.
+  Every feature, no limits — source-available, no lock-in.
 
 ## Quickstart
 
@@ -133,28 +131,6 @@ Poll interval and a menu-bar badge with live counts.
 
 See [`docs/PRODUCT.md`](docs/PRODUCT.md) for the full scope and roadmap.
 
-## gbar vs. PullBar
-
-gbar is inspired by [PullBar](https://github.com/menubar-apps/PullBar) but aims to be a
-*general* GitHub bar rather than a PR viewer.
-
-| | gbar | PullBar |
-|---|:---:|:---:|
-| Pull requests (created / assigned / review-requested) | ✅ | ✅ |
-| Mentioned pull requests | ✅ | — |
-| Issues | ✅ | — |
-| CI / checks | ✅ per-check | ✅ check suites |
-| Quick actions (approve / merge / mark read) | ✅ | — |
-| Desktop notifications | ✅ | — |
-| Starred signal & filter | ✅ | — |
-| Watchlist → Actions & Releases | ✅ | — |
-| Custom saved queries | ✅ | — |
-| Multiple accounts, orgs & GitHub Enterprise | ✅ | — |
-| Auth | OAuth device flow **or** PAT | PAT |
-| Source-available | ✅ | — |
-
-<sub>Compared against the free PullBar; PullBar Pro adds features not listed here.</sub>
-
 ## Install
 
 The signed, notarized build (opens with no Gatekeeper prompt) is on the
@@ -177,17 +153,14 @@ just run         # build and launch
 
 ## Authentication
 
-gbar is **free to run, self-host and modify**. Authentication uses GitHub's OAuth
-**device flow**, which needs only a public client ID — no server, no secret. Your tokens
-live in the **macOS Keychain**, never on disk in plaintext.
+gbar is **free to run, self-host and modify** — every feature, no limits, no account.
+Authentication uses GitHub's OAuth **device flow**, which needs only a public client ID —
+no server, no secret. Your tokens live in the **macOS Keychain**, never on disk in
+plaintext.
 
-- **Self-host (free):** register your own GitHub OAuth App in ~2 minutes, paste its
-  client ID into Settings once (or use a personal access token). Guide:
-  [`docs/SELF-HOST.md`](docs/SELF-HOST.md).
-- **Paid ("I'll configure it for you"):** get a build pre-configured with a ready-to-go
-  client ID (and, later, a hosted convenience backend) so you just click
-  *Sign in with GitHub*. This funds maintenance. Contact
-  [lanfermann.dev](https://lanfermann.dev).
+Register your own GitHub OAuth App in ~2 minutes and paste its client ID into Settings
+once, or skip that and use a personal access token. Full walkthrough:
+[`docs/SELF-HOST.md`](docs/SELF-HOST.md).
 
 ## Stack
 
@@ -205,6 +178,6 @@ concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
 
 **Source-available under the [PolyForm Shield License 1.0.0](LICENSE).** You may use,
 self-host, modify and redistribute gbar freely — but **not** to build a product or
-service that competes with gbar or with the paid/hosted gbar offering. This is *not*
-an OSI-approved license; that's deliberate, so the paid tier that funds the project
-can't simply be resold out from under it.
+service that competes with gbar. This is *not* an OSI-approved license, and that's
+deliberate: source-available, on purpose, so the project can't simply be repackaged and
+resold out from under it.

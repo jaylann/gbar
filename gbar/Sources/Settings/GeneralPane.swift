@@ -17,6 +17,7 @@ struct GeneralPane: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
+                badgeSection
                 refreshSection
                 notificationsSection
                 aboutSection
@@ -31,6 +32,48 @@ struct GeneralPane: View {
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await store.refreshNotificationAuthStatus() }
         }
+    }
+
+    // MARK: Menu bar badge
+
+    /// Which GitHub sources feed the number next to the menu-bar icon. The `SectionHeader`
+    /// count mirrors `store.badgeCount`, so it updates live as the toggles flip — the user sees
+    /// the badge change while choosing what it should reflect.
+    private var badgeSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            SectionHeader(title: "Menu bar badge", count: store.badgeCount)
+            Text(
+                "Which GitHub items the count next to the menu-bar icon reflects. Hover the icon to see the breakdown."
+            )
+            .font(Theme.Typography.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, Theme.Spacing.md)
+            .padding(.bottom, Theme.Spacing.xs)
+            groupCard {
+                ForEach(Array(BadgeSource.allCases.enumerated()), id: \.element.id) { index, source in
+                    if index > 0 { Divider() }
+                    toggleRow(source.title, isOn: badgeBinding(for: source))
+                }
+            }
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+            .font(Theme.Typography.rowTitle.weight(.regular))
+        }
+    }
+
+    /// A `Bool` binding over membership of one source in `store.badgeSources`.
+    private func badgeBinding(for source: BadgeSource) -> Binding<Bool> {
+        Binding(
+            get: { store.badgeSources.contains(source.rawValue) },
+            set: { isOn in
+                if isOn {
+                    store.badgeSources.insert(source.rawValue)
+                } else {
+                    store.badgeSources.remove(source.rawValue)
+                }
+            }
+        )
     }
 
     // MARK: Refresh

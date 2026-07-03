@@ -11,8 +11,11 @@ final class KeychainStoreTests: XCTestCase {
         try super.setUpWithError()
         // Probe the full round-trip, not just the write: on CI runners the write can land in
         // the file-keychain fallback while the read's data-protection query answers
-        // errSecItemNotFound (not errSecMissingEntitlement), so `get` never falls back and
-        // returns nil for a value `set` just stored. See #53.
+        // errSecItemNotFound (not errSecMissingEntitlement). `get` now also falls back to the
+        // file keychain on errSecItemNotFound (#53), so that documented round-trip case is now
+        // covered and should no longer need to skip on the affected runners. We keep the
+        // set-throws XCTSkip as defense (a truly locked-out runner still can't write), and keep
+        // the round-trip XCTSkip belt-and-suspenders in case a runner fails for other reasons.
         do {
             try KeychainStore.set("probe", for: key)
         } catch {
@@ -59,5 +62,22 @@ final class KeychainStoreTests: XCTestCase {
     func testValuesPreserveNonASCIIContent() throws {
         try KeychainStore.set("töken-✓-秘密", for: key)
         XCTAssertEqual(KeychainStore.get(key), "töken-✓-秘密")
+    }
+
+    /// The read-vs-write fallback semantics (#53): reads retry the file keychain on
+    /// errSecItemNotFound, writes do not; both always retry on errSecMissingEntitlement.
+    func testShouldRetryOnFileKeychainTruthTable() {
+        // Success never retries.
+        XCTAssertFalse(KeychainStore.shouldRetryOnFileKeychain(errSecSuccess, retryingNotFound: false))
+        XCTAssertFalse(KeychainStore.shouldRetryOnFileKeychain(errSecSuccess, retryingNotFound: true))
+        // Missing entitlement always retries (teamless build, no access group).
+        XCTAssertTrue(KeychainStore.shouldRetryOnFileKeychain(errSecMissingEntitlement, retryingNotFound: false))
+        XCTAssertTrue(KeychainStore.shouldRetryOnFileKeychain(errSecMissingEntitlement, retryingNotFound: true))
+        // Not-found retries only on reads.
+        XCTAssertFalse(KeychainStore.shouldRetryOnFileKeychain(errSecItemNotFound, retryingNotFound: false))
+        XCTAssertTrue(KeychainStore.shouldRetryOnFileKeychain(errSecItemNotFound, retryingNotFound: true))
+        // A generic error never retries.
+        XCTAssertFalse(KeychainStore.shouldRetryOnFileKeychain(errSecAuthFailed, retryingNotFound: false))
+        XCTAssertFalse(KeychainStore.shouldRetryOnFileKeychain(errSecAuthFailed, retryingNotFound: true))
     }
 }

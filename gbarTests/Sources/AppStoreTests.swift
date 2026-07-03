@@ -127,6 +127,41 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    /// After a successful approve, the PR's gate must update immediately — Approve hidden,
+    /// Merge shown — without a full section refresh. A prior `refresh()` seeds `repoMergeInfo`,
+    /// so `mergeable` here reflects *verified* push access (push: true), not the optimistic
+    /// pre-hydration fallback. The stub PR is authored by `jaylann` while the account is
+    /// `octocat`, so it's not the viewer's own PR and reviews are consulted.
+    func testApproveRefreshesGateImmediately() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 1, number: 42)]
+        fake.pullRequestResult = .stub(number: 42, mergeableState: "clean")
+        fake.repositoryResult = .stub(push: true)
+        fake.reviewsResult = [] // viewer hasn't approved yet
+        let store = try makeStore(api: fake) // account login = octocat
+
+        // Seed the gate + repo merge info via a real wave, so the later re-hydration exercises
+        // the verified push-access path rather than the optimistic nil-mergeInfo fallback.
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 42 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.alreadyApproved, false)
+        let searchesBeforeApprove = fake.recorder.searchCount
+
+        // The viewer approves; the follow-up client now reports their APPROVED review.
+        var approvedFake = fake
+        approvedFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let approved = approvedFake
+        store.makeAPI = { _, _ in approved }
+        await store.approve(pr)
+
+        // The gate re-hydrated inline — approve fired no extra section search.
+        XCTAssertEqual(fake.recorder.searchCount, searchesBeforeApprove)
+        let gate = try XCTUnwrap(store.gate(for: pr))
+        XCTAssertTrue(gate.alreadyApproved) // Approve button now hidden
+        XCTAssertTrue(gate.mergeable) // verified push access → Merge shown
+    }
+
     func testMergeRecordsCallAndRemovesItemOptimistically() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = SearchIssue.stubs(count: 2) // ids/numbers 0 and 1
@@ -422,7 +457,7 @@ final class AppStoreTests: XCTestCase {
         }
     }
 
-    func testBadgeCountSumsOnlyActionableSections() async throws {
+    func testBadgeCountDefaultsToReviewRequestedOnly() async throws {
         var fake = FakeGitHubAPI()
         // Distinct counts per query so we can verify which sections contribute.
         fake.resultsByQuery = [
@@ -435,8 +470,31 @@ final class AppStoreTests: XCTestCase {
 
         await store.refresh()
 
-        // Only review-requested (3) + assigned-prs (2) count toward the badge.
-        XCTAssertEqual(store.badgeCount, 5)
+        // Default badge source is review-requested only (3); nothing else contributes.
+        XCTAssertEqual(store.badgeCount, 3)
+        XCTAssertEqual(store.badgeTooltip, "3 PRs awaiting your review")
+    }
+
+    func testBadgeCountIsConfigurableAndDedupesSelectedSources() async throws {
+        var fake = FakeGitHubAPI()
+        // review-requested and assigned share PR id 3 — the same PR shows up in both. With both
+        // sources selected the union is {1,2,3,4}, so the badge must count that PR once (4, not 5).
+        fake.resultsByQuery = [
+            "is:open is:pr review-requested:@me": [
+                .stub(id: 1, number: 1),
+                .stub(id: 2, number: 2),
+                .stub(id: 3, number: 3),
+            ],
+            "is:open is:pr assignee:@me": [.stub(id: 3, number: 3), .stub(id: 4, number: 4)],
+        ]
+        let store = try makeStore(api: fake)
+        store.badgeSources = [BadgeSource.reviewRequested.rawValue, BadgeSource.assignedPRs.rawValue]
+
+        await store.refresh()
+
+        XCTAssertEqual(store.badgeCount, 4)
+        // Breakdown attributes the overlap to the first source, so it sums to the badge (3 + 1).
+        XCTAssertEqual(store.badgeTooltip, "3 to review · 1 assigned")
     }
 
     func testTabCountsRouteSectionsByKind() async throws {

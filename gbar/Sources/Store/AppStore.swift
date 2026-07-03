@@ -228,6 +228,17 @@ final class AppStore {
     static let notifySectionsKey = "gbar.notifySections"
     static let notifyChecksKey = "gbar.notifyChecks"
 
+    /// Which sources feed the menu-bar badge count (`BadgeSource` raw values). Defaults to
+    /// review-requested only — the sharpest "someone is waiting on you" signal. The badge is
+    /// derived from this in `badgeCount`/`badgeBreakdown` (see `AppStoreProjections`), so the
+    /// status item re-renders the instant it changes. Persisted as a plain string array; the
+    /// inline default lets the test-only init skip it.
+    var badgeSources: Set<String> = [BadgeSource.reviewRequested.rawValue] {
+        didSet { defaults.set(Array(badgeSources), forKey: Self.badgeSourcesKey) }
+    }
+
+    static let badgeSourcesKey = "gbar.badgeSources"
+
     /// Notification baselines, keyed by a composite of the owning account so ids never collide
     /// across hosts. See `AppStoreNotifications.swift` for the diff + seeding logic.
     ///
@@ -252,14 +263,7 @@ final class AppStore {
     /// User-editable menu sections. Seeded from `SearchQuery.defaults` on first launch;
     /// persisted as JSON so custom queries and ordering survive relaunches.
     var savedQueries: [SearchQuery.Section] {
-        didSet {
-            do {
-                let data = try JSONEncoder().encode(savedQueries)
-                defaults.set(data, forKey: Self.savedQueriesKey)
-            } catch {
-                Log.store.error("saved queries encode failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        didSet { persistJSON(savedQueries, forKey: Self.savedQueriesKey) }
     }
 
     static let savedQueriesKey = "gbar.savedQueries"
@@ -269,17 +273,20 @@ final class AppStore {
     /// scope for those tabs, deliberately not the starred set, so the per-repo request fan-out
     /// stays bounded and predictable. Persisted as JSON like `savedQueries`.
     var watchlist: [String] {
-        didSet {
-            do {
-                let data = try JSONEncoder().encode(watchlist)
-                defaults.set(data, forKey: Self.watchlistKey)
-            } catch {
-                Log.store.error("watchlist encode failed: \(error.localizedDescription, privacy: .public)")
-            }
-        }
+        didSet { persistJSON(watchlist, forKey: Self.watchlistKey) }
     }
 
     static let watchlistKey = "gbar.watchlist"
+
+    /// Shared persistence path for the JSON-backed preferences (`savedQueries`, `watchlist`):
+    /// encode to `defaults`, logging rather than throwing on the (unexpected) encode failure.
+    private func persistJSON(_ value: some Encodable, forKey key: String) {
+        do {
+            try defaults.set(JSONEncoder().encode(value), forKey: key)
+        } catch {
+            Log.store.error("\(key, privacy: .public) encode failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
 
     var isSignedIn: Bool {
         !accounts.isEmpty || pendingLegacyToken != nil
@@ -327,13 +334,22 @@ final class AppStore {
         } else {
             watchlist = []
         }
-        // Notification toggles default on; absence of the key means first launch.
+        restorePreferences()
+        restorePersistedAccounts()
+        startPolling()
+    }
+
+    /// Restore the simple toggle/choice preferences from `defaults`. Absence of a key means
+    /// first launch, so each falls back to its inline default (notifications on; badge shows
+    /// review-requested only).
+    private func restorePreferences() {
         notificationsEnabled = defaults.object(forKey: Self.notificationsEnabledKey) as? Bool ?? true
         notifyInbox = defaults.object(forKey: Self.notifyInboxKey) as? Bool ?? true
         notifySections = defaults.object(forKey: Self.notifySectionsKey) as? Bool ?? true
         notifyChecks = defaults.object(forKey: Self.notifyChecksKey) as? Bool ?? true
-        restorePersistedAccounts()
-        startPolling()
+        if let stored = defaults.stringArray(forKey: Self.badgeSourcesKey) {
+            badgeSources = Set(stored)
+        }
     }
 
     /// Restore connected accounts (metadata only; tokens stay in the Keychain), the account
