@@ -127,6 +127,26 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNotNil(store.lastErrorMessage)
     }
 
+    /// After a successful approve, the PR's gate must update immediately — Approve hidden,
+    /// Merge shown — without waiting for the next poll. The stub PR is authored by `jaylann`
+    /// while the account is `octocat`, so it's not the viewer's own PR and reviews are consulted.
+    func testApproveRefreshesGateImmediately() async throws {
+        var fake = FakeGitHubAPI()
+        fake.pullRequestResult = .stub(number: 42, mergeableState: "clean")
+        fake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        fake.repositoryResult = .stub(push: true)
+        let store = try makeStore(api: fake)
+        let pr = try item(SearchIssue.stub(id: 1, number: 42))
+
+        await store.approve(pr)
+
+        // The single-PR re-hydration ran inline (no full section refresh).
+        XCTAssertEqual(fake.recorder.searchCount, 0)
+        let gate = try XCTUnwrap(store.gate(for: pr))
+        XCTAssertTrue(gate.alreadyApproved) // Approve button now hidden
+        XCTAssertTrue(gate.mergeable) // Merge button now shown
+    }
+
     func testMergeRecordsCallAndRemovesItemOptimistically() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = SearchIssue.stubs(count: 2) // ids/numbers 0 and 1

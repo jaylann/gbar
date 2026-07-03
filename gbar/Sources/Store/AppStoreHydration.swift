@@ -32,6 +32,24 @@ extension AppStore {
         "\(accountID)\n\(slug)"
     }
 
+    /// Re-hydrate a single PR's action gate (+ checks) after a mutation such as an approval, so
+    /// the Approve/Merge buttons reflect the new state immediately instead of waiting for the next
+    /// poll. Reuses `fetchPRState`/`deriveGate` and the cached repo merge info. Guarded by
+    /// `checksGeneration`: if a full hydration wave supersedes (and possibly prunes) this key
+    /// while we fetch, we skip the write and let that wave own the state.
+    func refreshPRState(for item: AccountItem, using api: GitHubAPI) async {
+        let key = PRCheckKey(accountID: item.account.id, prID: item.issue.id)
+        let generation = checksGeneration
+        let cacheKey = repoPermissionKey(accountID: item.account.id, slug: item.issue.repositorySlug)
+        let mergeInfo = repoMergeInfo[cacheKey]
+        let state = await Self.fetchPRState(
+            for: item.issue, login: item.account.login, mergeInfo: mergeInfo, using: api
+        )
+        guard checksGeneration == generation else { return }
+        prGates[key] = state.gate
+        prChecks[key] = state.checks
+    }
+
     /// Fetch the merge signals (push access + allowed strategies) for any `(account, repo)` in
     /// `prs` not already cached, and fold the results into `repoMergeInfo`. Best-effort: a failed
     /// fetch leaves the key absent, so the gate treats that repo's permission as unknown
