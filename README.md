@@ -21,7 +21,6 @@
 <p align="center">
   <a href="#quickstart">Quickstart</a> ·
   <a href="#features">Features</a> ·
-  <a href="#gbar-vs-pullbar">vs. PullBar</a> ·
   <a href="#install">Install</a> ·
   <a href="#build-from-source">Build</a> ·
   <a href="#authentication">Auth</a> ·
@@ -31,10 +30,9 @@
 ---
 
 **gbar** puts everything you track on GitHub — pull requests, issues, CI status,
-notifications and quick actions — into your macOS menu bar, one glance away. It's like
-[PullBar](https://github.com/menubar-apps/PullBar), but broader: a *general* GitHub bar,
-not a PR-only viewer. Free to run, self-host and modify; source-available under PolyForm
-Shield.
+notifications and quick actions — into your macOS menu bar, one glance away. A *general*
+GitHub bar, not just a PR list. Free to run, self-host and modify; source-available under
+PolyForm Shield.
 
 ## Why gbar
 
@@ -132,28 +130,6 @@ Poll interval and a menu-bar badge with live counts.
 </table>
 
 See [`docs/PRODUCT.md`](docs/PRODUCT.md) for the full scope and roadmap.
-
-## gbar vs. PullBar
-
-gbar is inspired by [PullBar](https://github.com/menubar-apps/PullBar) but aims to be a
-*general* GitHub bar rather than a PR viewer.
-
-| | gbar | PullBar |
-|---|:---:|:---:|
-| Pull requests (created / assigned / review-requested) | ✅ | ✅ |
-| Mentioned pull requests | ✅ | — |
-| Issues | ✅ | — |
-| CI / checks | ✅ per-check | ✅ check suites |
-| Quick actions (approve / merge / mark read) | ✅ | — |
-| Desktop notifications | ✅ | — |
-| Starred signal & filter | ✅ | — |
-| Watchlist → Actions & Releases | ✅ | — |
-| Custom saved queries | ✅ | — |
-| Multiple accounts, orgs & GitHub Enterprise | ✅ | — |
-| Auth | OAuth device flow **or** PAT | PAT |
-| Source-available | ✅ | — |
-
-<sub>Compared against the free PullBar; PullBar Pro adds features not listed here.</sub>
 
 ## Install
 
