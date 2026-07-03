@@ -387,8 +387,9 @@ private func hostLabel(_ url: URL) -> String {
 /// Validation for the optional Enterprise host override. `URL(string:)` is lenient enough that a
 /// scheme-less `ghe.corp.com` parses as a relative path (no host), which would make every request
 /// malformed and surface only as a vague later failure; and `http://` would leak the bearer token
-/// in cleartext. A blank field is valid (use the default host).
-private enum HostField {
+/// in cleartext. A blank field is valid (use the default host). `internal` (not `private`) so it's
+/// unit-testable — this is the same cleartext-guard as `WebLink`.
+enum HostField {
     /// The validated override URL, or nil when blank/invalid.
     static func url(_ raw: String) -> URL? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

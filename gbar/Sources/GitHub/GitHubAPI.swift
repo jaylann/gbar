@@ -257,23 +257,16 @@ struct GitHubClient: GitHubAPI {
     /// GitHub currently emits second-precision `Z` timestamps, but an endpoint or GHE version can
     /// send fractional seconds (`…:05.123Z`). Accept both so one such field can't fail the entire
     /// page decode (which the plain `.iso8601` strategy would).
+    ///
+    /// Uses the `Sendable` value-type `Date.ISO8601FormatStyle` rather than a shared
+    /// `ISO8601DateFormatter` (which is not documented thread-safe) — this parser runs
+    /// concurrently across accounts inside `performRefresh`'s `TaskGroup`.
     private static func parseISO8601(_ string: String) -> Date? {
-        isoFractional.date(from: string) ?? isoPlain.date(from: string)
+        (try? isoFractional.parse(string)) ?? (try? isoPlain.parse(string))
     }
 
-    /// `ISO8601DateFormatter` parsing is thread-safe; `nonisolated(unsafe)` lets these be shared
-    /// statics under strict concurrency without per-decode allocation.
-    private nonisolated(unsafe) static let isoFractional: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter
-    }()
-
-    private nonisolated(unsafe) static let isoPlain: ISO8601DateFormatter = {
-        let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
-        return formatter
-    }()
+    private static let isoFractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let isoPlain = Date.ISO8601FormatStyle()
 
     /// A shared JSON encoder for request bodies — cheaper than allocating one per request.
     private static let encoder = JSONEncoder()

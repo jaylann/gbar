@@ -237,6 +237,75 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(reviews.last?.state, "CHANGES_REQUESTED")
     }
 
+    func testReviewsStopsAtPageCap() async throws {
+        let counter = PageCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value ?? "1"
+            counter.record(page)
+            // Always advertise a next page — the client must still stop at the hard cap.
+            let headers = ["Link": "<https://api.github.com/x?page=99>; rel=\"next\""]
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: headers)
+            )
+            return (response, Data("[]".utf8))
+        }
+
+        let client = try makeClient()
+        _ = try await client.reviews(repo: "octo/repo", number: 1)
+
+        XCTAssertEqual(counter.pages.count, GitHubClient.reviewsPageCap)
+    }
+
+    // MARK: - Date decoding
+
+    func testDecodesFractionalAndPlainISO8601Timestamps() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            // One fractional-second timestamp, one plain — both must decode (a GHE version can emit
+            // fractional seconds, which the old `.iso8601` strategy would reject, failing the page).
+            let body = """
+            [
+              { "user": { "login": "a", "avatar_url": null },
+                "state": "APPROVED", "submitted_at": "2026-02-01T00:00:00.123Z" },
+              { "user": { "login": "b", "avatar_url": null },
+                "state": "COMMENTED", "submitted_at": "2026-02-01T00:00:00Z" }
+            ]
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let reviews = try await client.reviews(repo: "octo/repo", number: 1)
+
+        XCTAssertEqual(reviews.count, 2)
+        XCTAssertNotNil(reviews[0].submittedAt)
+        XCTAssertNotNil(reviews[1].submittedAt)
+    }
+
+    func testInvalidTimestampSurfacesDecodingError() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = #"""
+            [{ "user": { "login": "a", "avatar_url": null }, "state": "APPROVED", "submitted_at": "not-a-date" }]
+            """#
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.reviews(repo: "octo/repo", number: 1)
+            XCTFail("Expected a malformed timestamp to throw a DecodingError")
+        } catch is DecodingError {}
+    }
+
     // MARK: - Rate limiting
 
     /// A primary-limit 403 (`X-RateLimit-Remaining: 0`) is surfaced as `.rateLimited` carrying the

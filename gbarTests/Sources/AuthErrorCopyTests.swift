@@ -62,6 +62,24 @@ final class AuthErrorCopyTests: XCTestCase {
         XCTAssertTrue(message.localizedCaseInsensitiveContains("base url"))
     }
 
+    func testRateLimitedWithResetNamesTheTime() {
+        let until = Date().addingTimeInterval(600)
+        let message = AuthErrorCopy.message(for: GitHubClient.ClientError.rateLimited(until: until))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("rate limited"))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("retrying at"))
+    }
+
+    func testRateLimitedWithoutResetSaysShortly() {
+        let message = AuthErrorCopy.rateLimitMessage(until: nil)
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("rate limited"))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("shortly"))
+    }
+
+    func testTooManyRequestsMentionsRateLimit() {
+        let message = AuthErrorCopy.message(for: GitHubClient.ClientError.http(429))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("rate"))
+    }
+
     // MARK: - Transport / fallback
 
     func testURLErrorReadsAsAConnectionProblem() {

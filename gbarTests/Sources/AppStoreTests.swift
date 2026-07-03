@@ -995,10 +995,33 @@ final class AppStoreTests: XCTestCase {
         let store = try makeStore(api: fake)
 
         await store.refresh()
+        await store.awaitChecksHydration()
 
         XCTAssertTrue(store.sections.contains { !$0.items.isEmpty })
         XCTAssertNotNil(store.rateLimitedUntil)
         XCTAssertFalse(store.sessionExpired)
+        // The request-heavy CI/repo-feed hydration (N+1 over the PR list) is skipped while limited.
+        XCTAssertEqual(fake.recorder.pullRequestCount, 0)
+    }
+
+    func testPollDelayHonorsRateLimitAndCadenceFloor() {
+        let now = Date()
+        // A future reset past the cadence wins.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(300), now: now),
+            300, accuracy: 0.01
+        )
+        // A reset sooner than the cadence floors at the cadence.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(10), now: now),
+            60, accuracy: 0.01
+        )
+        // A past reset and a nil reset both degrade to the plain cadence.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(-100), now: now),
+            60, accuracy: 0.01
+        )
+        XCTAssertEqual(AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: nil, now: now), 60, accuracy: 0.01)
     }
 
     /// A clean poll after a rate limit clears the backoff and its message.
@@ -1119,10 +1142,11 @@ final class AppStoreTests: XCTestCase {
         // Interior whitespace is a typo, not a repo path.
         XCTAssertNil(AppStore.normalizedSlug("own er/repo"))
         XCTAssertNil(AppStore.normalizedSlug("owner/ "))
-        // Path-traversal segments are rejected so a slug can't rewrite the request path.
+        // Path-traversal segments are rejected so a slug can't rewrite the request path (these are
+        // valid 2-component slugs that only the new `.`/`..` guard rejects).
         XCTAssertNil(AppStore.normalizedSlug("../foo"))
         XCTAssertNil(AppStore.normalizedSlug("owner/.."))
-        XCTAssertNil(AppStore.normalizedSlug("owner/re/../po"))
+        XCTAssertNil(AppStore.normalizedSlug("../repo"))
         // A repo name containing dots (but not a bare `..`) is still valid.
         XCTAssertEqual(AppStore.normalizedSlug("owner/repo.js"), "owner/repo.js")
     }

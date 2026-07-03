@@ -18,7 +18,9 @@ extension AppStore {
         let client = makeDeviceFlowClient(clientID, AppConfig.webBaseURL(forAPI: apiBaseURL))
         let code = try await client.requestDeviceCode(scopes: DeviceFlowClient.defaultScopes)
         onUserCode(code.userCode)
-        if let url = URL(string: code.verificationUri) { openURL(url) }
+        // `verificationUri` is host-returned (semi-trusted on Enterprise) — gate it through the
+        // same http(s) allowlist as every other host URL before opening it.
+        if let url = WebLink.parse(code.verificationUri) { openURL(url) }
         let token = try await client.pollForToken(code)
         try await addAccount(token: token, kind: .oauth, apiBaseURL: apiBaseURL)
     }

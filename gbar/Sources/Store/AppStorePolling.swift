@@ -18,12 +18,8 @@ extension AppStore {
                 // `refresh()` is single-flight, so a menu-triggered or manual refresh already in
                 // flight coalesces here rather than racing this poll tick. See #10.
                 await self.refresh()
-                // Honour a rate-limit reset: sleep to whichever is longer, the configured cadence
-                // or the reported reset time, so we don't re-poll straight into GitHub's limit.
-                let backoff = self.rateLimitedUntil.map { max(0, $0.timeIntervalSinceNow) } ?? 0
-                let seconds = max(self.pollInterval, backoff)
                 do {
-                    try await Task.sleep(for: .seconds(seconds))
+                    try await Task.sleep(for: .seconds(self.nextPollDelay()))
                 } catch {
                     return // cancelled
                 }
@@ -34,5 +30,18 @@ extension AppStore {
     func stopPolling() {
         pollTask?.cancel()
         pollTask = nil
+    }
+
+    /// Delay before the next poll tick: the configured cadence, or a longer wait when GitHub asked
+    /// us to back off past it (`rateLimitedUntil`), so we don't re-poll straight into the limit.
+    func nextPollDelay(now: Date = Date()) -> TimeInterval {
+        Self.pollDelay(pollInterval: pollInterval, rateLimitedUntil: rateLimitedUntil, now: now)
+    }
+
+    /// Pure delay computation (injectable inputs) so the backoff logic is unit-testable without
+    /// driving the real `Task.sleep` loop.
+    static func pollDelay(pollInterval: TimeInterval, rateLimitedUntil: Date?, now: Date) -> TimeInterval {
+        let backoff = rateLimitedUntil.map { max(0, $0.timeIntervalSince(now)) } ?? 0
+        return max(pollInterval, backoff)
     }
 }
