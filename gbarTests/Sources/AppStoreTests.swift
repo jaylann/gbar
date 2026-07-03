@@ -422,7 +422,7 @@ final class AppStoreTests: XCTestCase {
         }
     }
 
-    func testBadgeCountSumsOnlyActionableSections() async throws {
+    func testBadgeCountDefaultsToReviewRequestedOnly() async throws {
         var fake = FakeGitHubAPI()
         // Distinct counts per query so we can verify which sections contribute.
         fake.resultsByQuery = [
@@ -435,8 +435,31 @@ final class AppStoreTests: XCTestCase {
 
         await store.refresh()
 
-        // Only review-requested (3) + assigned-prs (2) count toward the badge.
-        XCTAssertEqual(store.badgeCount, 5)
+        // Default badge source is review-requested only (3); nothing else contributes.
+        XCTAssertEqual(store.badgeCount, 3)
+        XCTAssertEqual(store.badgeTooltip, "3 PRs awaiting your review")
+    }
+
+    func testBadgeCountIsConfigurableAndDedupesSelectedSources() async throws {
+        var fake = FakeGitHubAPI()
+        // review-requested and assigned share PR id 3 — the same PR shows up in both. With both
+        // sources selected the union is {1,2,3,4}, so the badge must count that PR once (4, not 5).
+        fake.resultsByQuery = [
+            "is:open is:pr review-requested:@me": [
+                .stub(id: 1, number: 1),
+                .stub(id: 2, number: 2),
+                .stub(id: 3, number: 3),
+            ],
+            "is:open is:pr assignee:@me": [.stub(id: 3, number: 3), .stub(id: 4, number: 4)],
+        ]
+        let store = try makeStore(api: fake)
+        store.badgeSources = [BadgeSource.reviewRequested.rawValue, BadgeSource.assignedPRs.rawValue]
+
+        await store.refresh()
+
+        XCTAssertEqual(store.badgeCount, 4)
+        // Breakdown attributes the overlap to the first source, so it sums to the badge (3 + 1).
+        XCTAssertEqual(store.badgeTooltip, "3 to review · 1 assigned")
     }
 
     func testTabCountsRouteSectionsByKind() async throws {
