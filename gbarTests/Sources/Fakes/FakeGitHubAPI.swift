@@ -23,6 +23,13 @@ final class CallRecorder: @unchecked Sendable {
     private var _approvals: [Approve] = []
     private var _merges: [Merge] = []
     private var _searchCount = 0
+    private var _pullRequestQueue: [PullRequestDetail] = []
+    private var _pullRequestCount = 0
+
+    /// Total `pullRequest` calls received — lets a test assert the post-approve poll retried.
+    var pullRequestCount: Int {
+        lock.withLock { _pullRequestCount }
+    }
 
     /// Thread IDs passed to `markNotificationRead`, in call order.
     var markedThreadIDs: [String] {
@@ -65,6 +72,22 @@ final class CallRecorder: @unchecked Sendable {
 
     func recordMerge(repo: String, number: Int, method: MergeMethod) {
         lock.withLock { _merges.append(Merge(repo: repo, number: number, method: method)) }
+    }
+
+    /// Seed a sequence of PR details drained one-per-call by `pullRequest`, so a test can model
+    /// GitHub's async `mergeable_state` recompute (e.g. `"blocked"` then `"clean"`).
+    func setPullRequestQueue(_ details: [PullRequestDetail]) {
+        lock.withLock { _pullRequestQueue = details }
+    }
+
+    /// Return the next queued PR detail, or `nil` once exhausted (caller falls back to its stub).
+    /// Always bumps the call counter.
+    func nextPullRequest() -> PullRequestDetail? {
+        lock.withLock {
+            _pullRequestCount += 1
+            guard !_pullRequestQueue.isEmpty else { return nil }
+            return _pullRequestQueue.count == 1 ? _pullRequestQueue[0] : _pullRequestQueue.removeFirst()
+        }
     }
 }
 
@@ -131,7 +154,7 @@ struct FakeGitHubAPI: GitHubAPI {
     /// Returns the injected PR detail and check runs; CI hydration tests rely on these
     /// succeeding, so neither endpoint throws unless a global `error` is set elsewhere.
     func pullRequest(repo _: String, number _: Int) async throws -> PullRequestDetail {
-        pullRequestResult
+        recorder.nextPullRequest() ?? pullRequestResult
     }
 
     func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
