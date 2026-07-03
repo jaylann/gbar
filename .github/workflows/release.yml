@@ -254,11 +254,16 @@ jobs:
           xcrun stapler staple "${{ steps.build.outputs.path }}"
           xcrun stapler validate "${{ steps.build.outputs.path }}"
 
+      # Upload the versioned DMG plus a stable-named copy, so
+      # releases/latest/download/gbar.dmg is a permanent direct-download URL
+      # (the landing page's Download button points at it).
       - name: Upload DMG to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${{ needs.tag.outputs.tag }}" "${{ steps.build.outputs.path }}" --clobber
+          cp "${{ steps.build.outputs.path }}" gbar.dmg
+          gh release upload "${{ needs.tag.outputs.tag }}" \
+            "${{ steps.build.outputs.path }}" gbar.dmg --clobber
 
       # Regenerate the Homebrew cask in jaylann/homebrew-tap so `brew install --cask
       # jaylann/tap/gbar` picks up the new version. Pushes as the lanfermann-release-bot
