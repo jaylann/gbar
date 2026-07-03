@@ -22,7 +22,9 @@ protocol LaunchAtLoginManaging: AnyObject {
 /// Defaults so a test double only needs `isEnabled` + `setEnabled`; the live service overrides
 /// the approval/settings hooks.
 extension LaunchAtLoginManaging {
-    var requiresApproval: Bool { false }
+    var requiresApproval: Bool {
+        false
+    }
 
     func openLoginItemsSettings() {}
 }
