@@ -78,8 +78,11 @@ enum KeychainStore {
     /// same op against the file-based keychain so self-host builds keep working. Reads pass
     /// `retryingNotFound: true` so an `errSecItemNotFound` from the data-protection query also
     /// retries the file keychain — otherwise a token written via the fallback reads back nil (#53).
-    private static func withKeychain(retryingNotFound: Bool = false,
-                                     _ op: (_ useDataProtection: Bool) -> OSStatus) -> OSStatus {
+    private static func withKeychain(
+        retryingNotFound: Bool = false,
+        _ op: (_ useDataProtection: Bool) -> OSStatus
+    )
+    -> OSStatus {
         let status = op(true)
         guard shouldRetryOnFileKeychain(status, retryingNotFound: retryingNotFound) else { return status }
         return op(false)
