@@ -181,6 +181,11 @@ final class AppStore {
     var makeDeviceFlowClient: @Sendable (_ clientID: String, _ webBaseURL: URL) -> DeviceFlowClient =
         { DeviceFlowClient(clientID: $0, webBaseURL: $1) }
 
+    /// Suspends for a duration between poll attempts. Overridable so tests can run the
+    /// post-approve poll to completion instantly; defaults to a real `Task.sleep`.
+    @ObservationIgnored
+    var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+
     /// Reads an account's token. Injectable so tests avoid the Keychain; defaults to the
     /// per-account Keychain key.
     @ObservationIgnored

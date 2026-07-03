@@ -30,6 +30,7 @@ struct SkeletonRow: View {
         .padding(.horizontal, Theme.Spacing.md)
         .padding(.vertical, density.rowVerticalPadding)
         .frame(minHeight: density.rowHeight, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .opacity(reduceMotion ? 0.6 : (pulsing ? 0.4 : 0.7))
         .onAppear {
             guard !reduceMotion else { return }
@@ -58,17 +59,52 @@ struct SkeletonRow: View {
     }
 }
 
-/// A short stack of skeleton rows for the initial load.
+/// A stack of skeleton rows for the initial load. Matches the real list's inter-row spacing
+/// (`Theme.Spacing.sm`) so the placeholder reads like the content it stands in for.
 struct LoadingView: View {
+    /// Fixed count for the gallery/preview. When `fillsHeight` is set the count is derived
+    /// from the available height instead, so the skeleton fills the tab like the real list.
     var rows = 4
+    var fillsHeight = false
     var reservesDisclosureGutter = false
 
+    @Environment(\.density) private var density
+
     var body: some View {
-        VStack(spacing: 2) {
-            ForEach(0..<rows, id: \.self) { _ in
+        if fillsHeight {
+            GeometryReader { proxy in
+                stack(count: rowCount(for: proxy.size.height))
+                    .frame(maxWidth: .infinity, alignment: .top)
+            }
+        } else {
+            stack(count: rows)
+        }
+    }
+
+    private func stack(count: Int) -> some View {
+        VStack(spacing: Theme.Spacing.sm) {
+            ForEach(0..<count, id: \.self) { _ in
                 SkeletonRow(reservesDisclosureGutter: reservesDisclosureGutter)
             }
         }
+    }
+
+    /// A `SkeletonRow` stacks two lines of text, so its real height exceeds the density floor
+    /// (`rowHeight`, just a `minHeight`). Estimate the intrinsic height — biased slightly high so
+    /// the fitted count rounds *down* and the bottom row is never clipped (the skeleton, unlike
+    /// the real list, isn't scrollable).
+    private var estimatedRowHeight: CGFloat {
+        // rowTitle (~16) + 2pt VStack gap + caption (~13), rounded up.
+        let twoLineText: CGFloat = 32
+        return max(density.rowHeight, twoLineText + density.rowVerticalPadding * 2)
+    }
+
+    /// One skeleton per row-stride (row height + inter-row gap) that fits the body, clamped
+    /// to a sensible floor so a short container still reads as a list.
+    private func rowCount(for height: CGFloat) -> Int {
+        let stride = estimatedRowHeight + Theme.Spacing.sm
+        guard stride > 0, height > 0 else { return rows }
+        return max(rows, Int((height + Theme.Spacing.sm) / stride))
     }
 }
 

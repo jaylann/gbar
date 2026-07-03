@@ -162,6 +162,71 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(gate.mergeable) // verified push access → Merge shown
     }
 
+    /// GitHub recomputes `mergeable_state` asynchronously after an approval, so the first refetch
+    /// still reads the stale `"blocked"`. The post-approve poll must retry until the recompute lands
+    /// (`"clean"`) and only then reveal Merge — this is the bug the single-shot refresh missed.
+    func testApproveRefreshPollsUntilMergeableStateRecomputes() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 1, number: 42)]
+        fake.pullRequestResult = .stub(number: 42, mergeableState: "blocked")
+        fake.repositoryResult = .stub(push: true)
+        fake.reviewsResult = []
+        let store = try makeStore(api: fake) // account login = octocat
+        store.sleep = { _ in } // run the backoff schedule instantly
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 42 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked
+
+        // The viewer approves. The follow-up client reports their APPROVED review, and the PR detail
+        // recomputes over two polls: stale "blocked" first, then "clean".
+        var approvedFake = fake
+        approvedFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        fake.recorder.setPullRequestQueue([
+            .stub(number: 42, mergeableState: "blocked"),
+            .stub(number: 42, mergeableState: "clean"),
+        ])
+        let callsBefore = fake.recorder.pullRequestCount
+        let approved = approvedFake
+        store.makeAPI = { _, _ in approved }
+        await store.approve(pr)
+
+        let gate = try XCTUnwrap(store.gate(for: pr))
+        XCTAssertTrue(gate.alreadyApproved) // Approve hidden on the first (consistent) fetch
+        XCTAssertTrue(gate.mergeable) // poll advanced past the stale "blocked" → Merge shown
+        XCTAssertGreaterThan(fake.recorder.pullRequestCount - callsBefore, 1) // it retried
+    }
+
+    /// A PR that stays `"blocked"` across every poll (e.g. a second required approval) must end with
+    /// Merge hidden — the poll gives up cleanly rather than flipping it on optimistically.
+    func testApproveRefreshLeavesMergeBlockedWhenNeverRecomputes() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 1, number: 42)]
+        fake.pullRequestResult = .stub(number: 42, mergeableState: "blocked")
+        fake.repositoryResult = .stub(push: true)
+        fake.reviewsResult = []
+        let store = try makeStore(api: fake)
+        store.sleep = { _ in }
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 42 })
+        try await waitUntil { store.gate(for: pr) != nil }
+
+        var approvedFake = fake
+        approvedFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let approved = approvedFake
+        store.makeAPI = { _, _ in approved }
+        let callsBefore = fake.recorder.pullRequestCount
+        await store.approve(pr)
+
+        let gate = try XCTUnwrap(store.gate(for: pr))
+        XCTAssertTrue(gate.alreadyApproved)
+        XCTAssertFalse(gate.mergeable) // still blocked → Merge stays hidden
+        // Ran the whole schedule (first fetch + one per backoff) before giving up.
+        XCTAssertEqual(fake.recorder.pullRequestCount - callsBefore, AppStore.approveRefreshRetryDelays.count + 1)
+    }
+
     func testMergeRecordsCallAndRemovesItemOptimistically() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = SearchIssue.stubs(count: 2) // ids/numbers 0 and 1
