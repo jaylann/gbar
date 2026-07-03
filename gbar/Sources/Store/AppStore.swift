@@ -481,7 +481,7 @@ extension AppStore {
             }
             // End the first-load skeleton only when we're genuinely signed out now (the dead
             // legacy token was dropped). A still-pending token after a *transient* migration
-            // failure keeps the skeleton so the next poll's retry isn't pre-empted by an empty state.
+            // failure keeps the skeleton so the next poll's retry isn't superseded by an empty state.
             if !isSignedIn { hasLoaded = true }
             return
         }

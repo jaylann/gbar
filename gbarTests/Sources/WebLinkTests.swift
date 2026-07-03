@@ -18,7 +18,7 @@ final class WebLinkTests: XCTestCase {
         XCTAssertNil(WebLink.parse("custom-scheme://do-something"))
     }
 
-    func testRejectsNilAndUnparseable() {
+    func testRejectsNilAndUnparsable() {
         XCTAssertNil(WebLink.parse(nil))
         XCTAssertNil(WebLink.parse(""))
     }
