@@ -155,6 +155,12 @@ final class AppStore {
     /// sign-out so stale check-runs requests stop firing with a removed token.
     var checksTask: Task<Void, Never>?
 
+    /// The background poll started after an approval to reveal Merge once GitHub finishes
+    /// recomputing the PR's `mergeable_state` (which lags the approval by seconds). Kept off the
+    /// approve call's own async path so the inline composer closes immediately instead of spinning
+    /// for the whole poll. Cancelled on sign-out and superseded by the next approval.
+    var mergeReadinessTask: Task<Void, Never>?
+
     /// Max concurrent PR-detail+check-runs fetches during CI hydration — this is an N+1 over
     /// the PR list (two requests each), so cap it to stay friendly to GitHub's rate limit.
     static let checksConcurrency = 5
@@ -182,8 +188,8 @@ final class AppStore {
         { DeviceFlowClient(clientID: $0, webBaseURL: $1) }
 
     /// Suspends for a duration between poll attempts. Overridable so tests can run the
-    /// post-approve poll to completion instantly; defaults to a real `Task.sleep`.
-    @ObservationIgnored
+    /// post-approve poll to completion instantly; defaults to a real `Task.sleep`. Never read from
+    /// a view body, so it needs no `@ObservationIgnored`.
     var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
 
     /// Reads an account's token. Injectable so tests avoid the Keychain; defaults to the
@@ -716,6 +722,7 @@ extension AppStore {
         refreshTask = nil
         checksTask?.cancel()
         checksTask = nil
+        mergeReadinessTask?.cancel() // its loop also bails on the now-false `isSignedIn`
         checksGeneration += 1
         repoFeedsTask?.cancel()
         repoFeedsTask = nil
