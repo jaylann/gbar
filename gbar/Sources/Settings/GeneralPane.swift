@@ -18,6 +18,7 @@ struct GeneralPane: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Spacing.lg) {
                 badgeSection
+                startupSection
                 refreshSection
                 notificationsSection
                 aboutSection
@@ -26,12 +27,45 @@ struct GeneralPane: View {
             .padding(.horizontal, Theme.Spacing.sm)
             .padding(.vertical, Theme.Spacing.md)
         }
-        .task { await store.refreshNotificationAuthStatus() }
-        // Re-check when gbar regains focus, so flipping the toggle in System Settings and
+        .task {
+            await store.refreshNotificationAuthStatus()
+            store.refreshLaunchAtLoginStatus()
+        }
+        // Re-check when gbar regains focus, so flipping either toggle in System Settings and
         // clicking back updates the row without reopening the pane.
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             Task { await store.refreshNotificationAuthStatus() }
+            store.refreshLaunchAtLoginStatus()
         }
+    }
+
+    // MARK: Startup
+
+    private var startupSection: some View {
+        VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
+            SectionHeader(title: "Startup")
+            groupCard {
+                settingRow(
+                    title: "Launch at login",
+                    subtitle: "Start gbar automatically when you log in to your Mac."
+                ) {
+                    Toggle("Launch at login", isOn: launchAtLoginBinding)
+                        .labelsHidden()
+                }
+            }
+            .toggleStyle(.switch)
+            .tint(Theme.Palette.accent)
+            .font(Theme.Typography.rowTitle.weight(.regular))
+        }
+    }
+
+    /// A `Bool` binding that reads the mirrored state and routes writes through the store, which
+    /// registers/unregisters the login item and reconciles the mirror on failure.
+    private var launchAtLoginBinding: Binding<Bool> {
+        Binding(
+            get: { store.launchAtLoginEnabled },
+            set: { store.setLaunchAtLogin($0) }
+        )
     }
 
     // MARK: Menu bar badge

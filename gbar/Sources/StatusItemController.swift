@@ -15,6 +15,10 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
     /// store can post banners without knowing about `UNUserNotificationCenter`. Both are `@MainActor`.
     private let notificationService = NotificationService()
 
+    /// Manages gbar's macOS login-item registration and hands it to the store, so the store can
+    /// toggle "Launch at login" without importing `ServiceManagement`. `@MainActor` like the store.
+    private let launchAtLoginService = LaunchAtLoginService()
+
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     /// Outside-click / app-resign monitors, live only while the popover is shown. Installed in
@@ -29,6 +33,11 @@ final class StatusItemController: NSObject, NSApplicationDelegate {
         // popover and the OS permission prompt appears at start.
         store.notifier = notificationService
         Task { await store.requestNotificationAuthorization() }
+
+        // Wire up login-item management and read the current registration so the Settings toggle
+        // reflects reality from the first open.
+        store.launchAtLogin = launchAtLoginService
+        store.refreshLaunchAtLoginStatus()
 
         let content = NSHostingController(
             rootView: MenuContentView(store: store) { [weak self] in self?.openSettings() }
