@@ -11,18 +11,22 @@ extension AppStore {
         launchAtLoginEnabled = launchAtLogin.isEnabled
     }
 
-    /// Register or unregister gbar as a login item. On success the observable mirror follows the
-    /// request; on failure it re-syncs to the OS's actual state so the toggle snaps back to
-    /// reality instead of showing a value the registration never reached.
+    /// Register or unregister gbar as a login item, then mirror the OS's *actual* resulting state
+    /// (never the requested value) so the toggle can't show something the OS didn't reach. If an
+    /// enable is blocked because the user previously disabled gbar in Login Items
+    /// (`.requiresApproval` — a register call can't clear it), send them there to flip it on
+    /// rather than leaving the toggle silently snapped off.
     func setLaunchAtLogin(_ enabled: Bool) {
         guard let launchAtLogin else { return }
         do {
             try launchAtLogin.setEnabled(enabled)
-            launchAtLoginEnabled = enabled
         } catch {
             let action = enabled ? "register" : "unregister"
             Log.store.error("launch-at-login \(action) failed: \(error.localizedDescription, privacy: .public)")
-            launchAtLoginEnabled = launchAtLogin.isEnabled
+        }
+        launchAtLoginEnabled = launchAtLogin.isEnabled
+        if enabled, !launchAtLoginEnabled, launchAtLogin.requiresApproval {
+            launchAtLogin.openLoginItemsSettings()
         }
     }
 }

@@ -6,13 +6,19 @@ import XCTest
 @MainActor
 final class SpyLaunchAtLogin: LaunchAtLoginManaging {
     var isEnabled = false
+    var requiresApproval = false
     var errorToThrow: Error?
     private(set) var setCalls: [Bool] = []
+    private(set) var openSettingsCalls = 0
 
     func setEnabled(_ enabled: Bool) throws {
         setCalls.append(enabled)
         if let errorToThrow { throw errorToThrow }
         isEnabled = enabled
+    }
+
+    func openLoginItemsSettings() {
+        openSettingsCalls += 1
     }
 }
 
@@ -64,6 +70,39 @@ final class AppStoreLaunchAtLoginTests: XCTestCase {
         XCTAssertEqual(spy.setCalls, [true])
         XCTAssertFalse(spy.isEnabled) // setEnabled threw before flipping it
         XCTAssertFalse(store.launchAtLoginEnabled)
+    }
+
+    /// A failed *unregister* must leave the mirror `true` — the case where re-syncing to the OS's
+    /// actual state prevents the toggle from lying that gbar was removed.
+    func testUnregisterFailureKeepsMirrorEnabled() throws {
+        let store = try makeStore()
+        let spy = SpyLaunchAtLogin()
+        spy.isEnabled = true
+        spy.errorToThrow = Boom()
+        store.launchAtLogin = spy
+        store.launchAtLoginEnabled = true
+
+        store.setLaunchAtLogin(false)
+
+        XCTAssertEqual(spy.setCalls, [false])
+        XCTAssertTrue(spy.isEnabled) // unregister threw, so it's still enabled
+        XCTAssertTrue(store.launchAtLoginEnabled)
+        XCTAssertEqual(spy.openSettingsCalls, 0)
+    }
+
+    /// When enabling is blocked because the item needs manual approval, the mirror stays off and
+    /// the user is sent to Login Items rather than left with a silently-reverted toggle.
+    func testEnableRequiringApprovalOpensLoginItems() throws {
+        let store = try makeStore()
+        let spy = SpyLaunchAtLogin()
+        spy.errorToThrow = Boom() // register can't clear .requiresApproval
+        spy.requiresApproval = true
+        store.launchAtLogin = spy
+
+        store.setLaunchAtLogin(true)
+
+        XCTAssertFalse(store.launchAtLoginEnabled)
+        XCTAssertEqual(spy.openSettingsCalls, 1)
     }
 
     func testRefreshMirrorsServiceStatus() throws {
