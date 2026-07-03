@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>Your whole GitHub life, one glance away in the macOS menu bar.</strong><br>
-  Pull requests, issues, CI, notifications and quick actions — without opening a browser tab.
+  Pull requests, issues, CI, notifications and quick actions, without opening a browser tab.
 </p>
 
 <p align="center">
@@ -29,19 +29,19 @@
 
 ---
 
-**gbar** puts everything you track on GitHub — pull requests, issues, CI status,
-notifications and quick actions — into your macOS menu bar, one glance away. A *general*
+**gbar** puts everything you track on GitHub (pull requests, issues, CI status,
+notifications and quick actions) into your macOS menu bar, one glance away. A *general*
 GitHub bar, not just a PR list. Free to run, self-host and modify; source-available under
 PolyForm Shield.
 
 ## Why gbar
 
-- **Glanceable.** What needs you — PRs awaiting your review, failing CI, new review
-  requests — reads straight from the menu bar, no window required.
+- **Glanceable.** What needs you (PRs awaiting your review, failing CI, new review
+  requests) reads straight from the menu bar, no window required.
 - **Broader than PRs.** Issues, checks, notifications, starred repos, a per-repo
-  watchlist and arbitrary saved searches — not just an assigned-PR list.
+  watchlist and arbitrary saved searches, not just an assigned-PR list.
 - **Yours to run.** OAuth device flow or a PAT, tokens in the Keychain, no backend.
-  Every feature, no limits — source-available, no lock-in.
+  Every feature, no limits; source-available, no lock-in.
 
 ## Quickstart
 
@@ -81,7 +81,7 @@ Per-check pass / fail / pending status surfaced on each PR.
 <td width="50%" valign="top">
 
 **⚡ Quick actions**<br>
-Open in browser, approve, merge, mark notifications read — from the menu.
+Open in browser, approve, merge, mark notifications read, all from the menu.
 
 </td>
 </tr>
@@ -153,8 +153,8 @@ just run         # build and launch
 
 ## Authentication
 
-gbar is **free to run, self-host and modify** — every feature, no limits, no account.
-Authentication uses GitHub's OAuth **device flow**, which needs only a public client ID —
+gbar is **free to run, self-host and modify**: every feature, no limits, no account.
+Authentication uses GitHub's OAuth **device flow**, which needs only a public client ID:
 no server, no secret. Your tokens live in the **macOS Keychain**, never on disk in
 plaintext.
 
@@ -170,14 +170,14 @@ concurrency) · [Tuist](https://tuist.dev) · SwiftFormat + SwiftLint · `just`.
 ## Conventions
 
 - **Branches:** `stage` is the working branch; `main` is release/tag-only.
-- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/) — enforced
+- **Commits:** [Conventional Commits](https://www.conventionalcommits.org/), enforced
   by a local `commit-msg` hook and the `pr-title` CI check.
 - **Lint/format:** `just check` (SwiftFormat + SwiftLint). Run before pushing.
 
 ## License
 
 **Source-available under the [PolyForm Shield License 1.0.0](LICENSE).** You may use,
-self-host, modify and redistribute gbar freely — but **not** to build a product or
+self-host, modify and redistribute gbar freely, but **not** to build a product or
 service that competes with gbar. This is *not* an OSI-approved license, and that's
 deliberate: source-available, on purpose, so the project can't simply be repackaged and
 resold out from under it.
