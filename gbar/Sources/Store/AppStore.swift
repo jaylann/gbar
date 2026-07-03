@@ -210,6 +210,20 @@ final class AppStore {
     /// persisted — always re-read live so it tracks System Settings.
     var notificationAuthStatus: NotificationAuthStatus?
 
+    // MARK: Launch at login
+
+    /// Registers/unregisters gbar as a macOS login item. Injected by the app
+    /// (`StatusItemController`) so the store stays testable — a real `SMAppService` call in a
+    /// unit-test bundle would target the test runner. Nil in tests that don't exercise it.
+    @ObservationIgnored
+    var launchAtLogin: (any LaunchAtLoginManaging)?
+
+    /// Observable mirror of the login-item state the Settings toggle binds to. Not persisted —
+    /// the OS owns the truth (`SMAppService.mainApp.status`), so it's re-read live via
+    /// `refreshLaunchAtLoginStatus()`, tracking changes made in System Settings. Inline default
+    /// lets the test-only init skip it.
+    var launchAtLoginEnabled = false
+
     /// Master switch for desktop notifications, plus per-category toggles. All default on;
     /// persisted like `apiBaseURL`. Inline defaults let the test-only init skip them.
     var notificationsEnabled = true {
@@ -427,24 +441,6 @@ extension AppStore {
     }
 }
 #endif
-
-// MARK: - Saved queries
-
-extension AppStore {
-    /// Append a fresh, empty saved query for the user to fill in. The UUID id keeps it
-    /// distinct from the baseline sections (so badge/actionable semantics are unaffected).
-    func addSavedQuery() {
-        savedQueries.append(SearchQuery.Section(id: UUID().uuidString, title: "", query: "", kind: nil))
-    }
-
-    func deleteSavedQuery(at offsets: IndexSet) {
-        savedQueries.remove(atOffsets: offsets)
-    }
-
-    func moveSavedQuery(from source: IndexSet, to destination: Int) {
-        savedQueries.move(fromOffsets: source, toOffset: destination)
-    }
-}
 
 // MARK: - Refresh
 
