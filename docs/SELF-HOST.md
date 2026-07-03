@@ -3,8 +3,7 @@
 gbar is free to self-host. Because it uses GitHub's **OAuth device flow**, you don't
 need a server or a client secret — just a public **client ID** from a GitHub OAuth App
 you register yourself. (Prefer zero setup? A personal access token also works — jump to
-[Option B](#option-b--personal-access-token). Want zero setup *and* one-click sign-in?
-See the paid build in the [README](../README.md).)
+[Option B](#option-b--personal-access-token).)
 
 ## Option A — your own GitHub OAuth App (recommended)
 
