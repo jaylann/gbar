@@ -258,6 +258,31 @@ final class GitHubClientTests: XCTestCase {
         XCTAssertEqual(counter.pages.count, GitHubClient.reviewsPageCap)
     }
 
+    /// The common case: a PR whose reviews fit on one page (no `Link: rel="next"`) costs exactly
+    /// one request. Pins the per-PR cost so the pagination cap can't silently start over-fetching
+    /// the 99%-case PR and multiply the hydration N+1 against GitHub's rate limit.
+    func testReviewsSinglePageIssuesOneRequest() async throws {
+        let counter = PageCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let page = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first { $0.name == "page" }?.value ?? "1"
+            counter.record(page)
+            // No Link header at all — a single page of reviews, the overwhelmingly common shape.
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = #"[{"user":{"login":"jaylann","avatar_url":null},"state":"APPROVED","submitted_at":"2026-01-01T00:00:00Z"}]"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let reviews = try await client.reviews(repo: "octo/repo", number: 42)
+
+        XCTAssertEqual(counter.pages, ["1"])
+        XCTAssertEqual(reviews.count, 1)
+    }
+
     // MARK: - Date decoding
 
     func testDecodesFractionalAndPlainISO8601Timestamps() async throws {
@@ -304,6 +329,143 @@ final class GitHubClientTests: XCTestCase {
             _ = try await client.reviews(repo: "octo/repo", number: 1)
             XCTFail("Expected a malformed timestamp to throw a DecodingError")
         } catch is DecodingError {}
+    }
+
+    // The reviews path proves fractional seconds decode, but the gate/list paths carry their date
+    // on *required* (non-optional) fields — a parse failure there fails the whole page, not one row.
+    // GHE can emit fractional seconds, so exercise fractional through each required field: a throw
+    // here is a hard regression (the old `.iso8601` strategy would reject fractional and blank the
+    // section). These decode failures on the hydration paths are also swallowed at runtime
+    // (`try?`), so only a unit test can catch them.
+
+    func testNotificationsDecodeFractionalTimestamp() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            [{
+              "id": "1", "unread": true, "reason": "review_requested",
+              "updated_at": "2026-02-01T00:00:00.123Z",
+              "subject": { "title": "PR", "type": "PullRequest", "url": null },
+              "repository": { "full_name": "octo/repo" }
+            }]
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let notifications = try await client.notifications()
+        XCTAssertEqual(notifications.count, 1)
+        XCTAssertEqual(notifications.first?.subject.title, "PR")
+    }
+
+    func testWorkflowRunsDecodeFractionalTimestamps() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            {
+              "total_count": 1,
+              "workflow_runs": [{
+                "id": 500, "name": "CI", "display_title": "t", "head_branch": "stage",
+                "event": "push", "status": "completed", "conclusion": "success",
+                "html_url": "https://github.com/octo/repo/actions/runs/500", "run_number": 12,
+                "created_at": "2026-01-01T00:00:00.5Z",
+                "updated_at": "2026-01-01T00:01:42.250Z",
+                "run_started_at": "2026-01-01T00:00:00.5Z"
+              }]
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let runs = try await client.workflowRuns(repo: "octo/repo")
+        XCTAssertEqual(runs.count, 1)
+        XCTAssertEqual(runs.first?.id, 500)
+    }
+
+    func testReleasesDecodeFractionalTimestamp() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            [{
+              "id": 900, "tag_name": "v1.2.0", "name": "r",
+              "html_url": "https://github.com/octo/repo/releases/tag/v1.2.0",
+              "published_at": "2026-01-01T00:00:00.001Z",
+              "created_at": "2026-01-01T00:00:00.001Z",
+              "draft": false, "prerelease": false,
+              "author": { "login": "jaylann", "avatar_url": null }
+            }]
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let releases = try await client.releases(repo: "octo/repo")
+        XCTAssertEqual(releases.count, 1)
+        XCTAssertEqual(releases.first?.tagName, "v1.2.0")
+    }
+
+    func testSearchIssuesDecodeFractionalTimestamp() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            {
+              "total_count": 1,
+              "items": [{
+                "id": 1, "number": 42, "title": "t",
+                "html_url": "https://github.com/octo/repo/pull/42", "state": "open",
+                "created_at": "2026-01-01T00:00:00.42Z",
+                "user": { "login": "jaylann", "avatar_url": null },
+                "repository_url": "https://api.github.com/repos/octo/repo",
+                "pull_request": { "html_url": "https://github.com/octo/repo/pull/42", "merged_at": null },
+                "draft": false
+              }]
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let items = try await client.searchIssues("is:open is:pr")
+        XCTAssertEqual(items.count, 1)
+        XCTAssertEqual(items.first?.number, 42)
+    }
+
+    func testPullRequestDecodesFractionalTimestamps() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            let body = """
+            {
+              "id": 42, "number": 42, "title": "PR", "state": "open",
+              "html_url": "https://github.com/octo/repo/pull/42", "merged": false,
+              "mergeable": true, "mergeable_state": "clean", "draft": false,
+              "user": { "login": "jaylann", "avatar_url": null },
+              "created_at": "2026-01-01T00:00:00.999Z",
+              "updated_at": "2026-01-01T00:00:00.999Z",
+              "head": { "sha": "abc", "ref": "feature" }
+            }
+            """
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        let detail = try await client.pullRequest(repo: "octo/repo", number: 42)
+        XCTAssertEqual(detail.number, 42)
     }
 
     // MARK: - Rate limiting
@@ -563,9 +725,11 @@ final class GitHubClientTests: XCTestCase {
     }
 
     /// GitHub sends `Cache-Control: private, max-age=60` on PR endpoints, so the default cache
-    /// policy would serve a stale body right after an approve/merge (the whole "Merge won't unlock"
-    /// bug). Requests must opt out of the local cache so a just-mutated PR reads through to origin.
-    func testRequestsBypassLocalHTTPCache() async throws {
+    /// policy would serve a stale body right after an approve/merge (the "Merge won't unlock" bug).
+    /// Requests revalidate with the origin instead: a changed resource returns a fresh 200 (the PR
+    /// reflects at once) while an unchanged one returns a rate-limit-free 304, so an idle inbox's
+    /// re-poll stops burning the hourly budget.
+    func testRequestsRevalidateWithOrigin() async throws {
         let box = HeaderBox()
         MockURLProtocol.handler = { request in
             box.cachePolicy = request.cachePolicy
@@ -590,7 +754,7 @@ final class GitHubClientTests: XCTestCase {
         let client = try makeClient()
         _ = try await client.pullRequest(repo: "octo/repo", number: 42)
 
-        XCTAssertEqual(box.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(box.cachePolicy, .reloadRevalidatingCacheData)
     }
 }
 

@@ -25,10 +25,21 @@ final class CallRecorder: @unchecked Sendable {
     private var _searchCount = 0
     private var _pullRequestQueue: [PullRequestDetail] = []
     private var _pullRequestCount = 0
+    private var _checkRunsCount = 0
 
     /// Total `pullRequest` calls received — lets a test assert the post-approve poll retried.
     var pullRequestCount: Int {
         lock.withLock { _pullRequestCount }
+    }
+
+    /// Total `checkRuns` calls received — lets a test assert an unchanged PR still polls CI even
+    /// when its detail refetch is skipped.
+    var checkRunsCount: Int {
+        lock.withLock { _checkRunsCount }
+    }
+
+    func recordCheckRuns() {
+        lock.withLock { _checkRunsCount += 1 }
     }
 
     /// Thread IDs passed to `markNotificationRead`, in call order.
@@ -158,6 +169,7 @@ struct FakeGitHubAPI: GitHubAPI {
     }
 
     func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
+        recorder.recordCheckRuns()
         if let checkRunsError {
             throw checkRunsError
         }

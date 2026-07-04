@@ -96,6 +96,10 @@ struct PRGate {
 struct PRState {
     let checks: PRChecks?
     let gate: PRGate?
+    /// The PR's head (sha + ref) as of this hydration, so a subsequent unchanged poll can re-fetch
+    /// just its check-runs against the same sha without re-fetching the detail. `nil` when the
+    /// detail fetch failed (no head to record).
+    let head: PullRequestDetail.Head?
 }
 
 /// The result of loading one account's sections + inbox, gathered off the main actor and

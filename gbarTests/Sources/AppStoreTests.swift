@@ -1004,6 +1004,60 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(fake.recorder.pullRequestCount, 0)
     }
 
+    /// A PR unchanged since the last poll (same `updated_at`) skips the detail+reviews refetch —
+    /// its gate is still current — but its check-runs are still re-read, because CI can flip on a
+    /// re-run of the same commit without bumping `updated_at`. This is the idle-inbox N+1 cut.
+    func testUnchangedPRSkipsDetailButStillPollsChecks() async throws {
+        let ts = Date()
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        fake.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        let detailAfterSeed = fake.recorder.pullRequestCount
+        let checksAfterSeed = fake.recorder.checkRunsCount
+        XCTAssertEqual(detailAfterSeed, 1, "seed poll fetches the detail once")
+
+        // Second poll, identical `updated_at`.
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertEqual(fake.recorder.pullRequestCount, detailAfterSeed, "unchanged PR must not refetch detail/reviews")
+        XCTAssertGreaterThan(
+            fake.recorder.checkRunsCount,
+            checksAfterSeed,
+            "check-runs must still be polled on the skip"
+        )
+    }
+
+    /// When a PR's `updated_at` advances, the skip does not apply — the detail is refetched so the
+    /// gate (mergeable/approved) re-derives against the new state.
+    func testAdvancedUpdatedAtRefetchesDetail() async throws {
+        let old = Date(timeIntervalSince1970: 1_700_000_000)
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old)]
+        seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertEqual(seed.recorder.pullRequestCount, 1)
+
+        var next = FakeGitHubAPI()
+        next.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old.addingTimeInterval(3600))]
+        next.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        next.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        store.makeAPI = { [next] _, _ in next }
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        // A fresh fake → its own recorder; a full refetch means the detail was fetched on it.
+        XCTAssertEqual(next.recorder.pullRequestCount, 1, "an advanced updated_at must trigger a full refetch")
+    }
+
     func testPollDelayHonorsRateLimitAndCadenceFloor() {
         let now = Date()
         // A future reset past the cadence wins.

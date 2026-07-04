@@ -43,6 +43,12 @@ final class AppStore {
     /// hydrated → the row stays optimistic (buttons show). Written only by the hydration wave
     /// and the reset sites here; views read only.
     var prGates: [PRCheckKey: PRGate] = [:]
+    /// What each PR looked like at its last successful hydration — the `updated_at` we hydrated
+    /// against and whether its CI had settled. Lets the next wave skip the detail/reviews/check-runs
+    /// refetch for a PR that hasn't changed (see `canSkipHydration`). Never read from a view, so
+    /// it's `@ObservationIgnored` — it's a request-saving cache, not display state.
+    @ObservationIgnored
+    var prHydrationMark: [PRCheckKey: HydrationMark] = [:]
     /// Cache of the viewer's merge signals per repo (push access + allowed strategies), keyed
     /// `"\(accountID)\n\(slug)"`. Filled lazily during hydration so we don't refetch
     /// `GET /repos/{repo}` every poll; a repo's permissions/settings rarely change within a
@@ -749,6 +755,7 @@ extension AppStore {
         notifications = []
         prChecks = [:]
         prGates = [:]
+        prHydrationMark = [:]
         repoMergeInfo = [:]
         starredByAccount = [:]
         actionRuns = []

@@ -114,9 +114,17 @@ extension AppStore {
         let repo = item.repositorySlug
         guard let detail = try? await api.pullRequest(repo: repo, number: item.number) else {
             Log.network.debug("pr detail skip #\(item.number, privacy: .public)")
-            return PRState(checks: nil, gate: nil)
+            return PRState(checks: nil, gate: nil, head: nil)
         }
-        let checks = includeChecks ? await fetchChecks(repo: repo, detail: detail, using: api) : nil
+        let checks = includeChecks
+            ? await fetchChecks(
+                repo: repo,
+                ref: detail.head.sha,
+                branch: detail.head.ref,
+                number: item.number,
+                using: api
+            )
+            : nil
         // `alreadyApproved` is irrelevant for the viewer's own PRs (Approve is hidden
         // synchronously in the row anyway), so skip the reviews call for them — it saves a
         // request per own-PR per poll, which matters against GitHub's hourly rate limit.
@@ -127,24 +135,44 @@ extension AppStore {
             await (try? api.reviews(repo: repo, number: item.number)) ?? []
         }
         let gate = deriveGate(detail: detail, reviews: reviews, login: login, mergeInfo: mergeInfo)
-        return PRState(checks: checks, gate: gate)
+        return PRState(checks: checks, gate: gate, head: detail.head)
     }
 
-    /// Map a PR's check runs to a `PRChecks`, or nil if it has no checks or the fetch fails.
+    /// Re-fetch just a PR's check-runs against a known head sha, reusing an already-derived gate.
+    /// Used when a poll finds the PR unchanged (`updated_at` didn't advance) so the detail+reviews
+    /// refetch is skipped — but CI can still flip on the same commit (a re-run), so the check-runs
+    /// are always re-read to keep the pass/fail banner honest. Never throws; a failed checks fetch
+    /// yields a `nil` checks (dot cleared, baseline preserved), matching `fetchPRState`.
+    nonisolated static func fetchChecksState(
+        repo: String,
+        number: Int,
+        head: PullRequestDetail.Head,
+        cachedGate: PRGate,
+        using api: GitHubAPI
+    ) async
+    -> PRState {
+        let checks = await fetchChecks(repo: repo, ref: head.sha, branch: head.ref, number: number, using: api)
+        return PRState(checks: checks, gate: cachedGate, head: head)
+    }
+
+    /// Map a PR's check runs (at `ref`) to a `PRChecks`, or nil if it has no checks or the fetch
+    /// fails. `branch` labels the check rows; `number` is only for the skip log line.
     private nonisolated static func fetchChecks(
         repo: String,
-        detail: PullRequestDetail,
+        ref: String,
+        branch: String,
+        number: Int,
         using api: GitHubAPI
     ) async
     -> PRChecks? {
         do {
-            let runs = try await api.checkRuns(repo: repo, ref: detail.head.sha)
+            let runs = try await api.checkRuns(repo: repo, ref: ref)
             guard let status = runs.ciRollup else { return nil }
-            let models = runs.map { $0.checkRowModel(repo: repo, branch: detail.head.ref) }
+            let models = runs.map { $0.checkRowModel(repo: repo, branch: branch) }
             return PRChecks(status: status, checks: models)
         } catch {
             Log.network
-                .debug("ci skip #\(detail.number, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                .debug("ci skip #\(number, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }

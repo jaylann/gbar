@@ -70,11 +70,24 @@ struct GitHubClient: GitHubAPI {
     let token: String
     private let session: URLSession
 
-    init(baseURL: URL, token: String, session: URLSession = .shared) {
+    init(baseURL: URL, token: String, session: URLSession = Self.liveSession) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
     }
+
+    /// The session backing every live request. Its private `URLCache` lets conditional requests
+    /// (`If-None-Match`, driven by the per-request `.reloadRevalidatingCacheData` policy) return a
+    /// `304 Not Modified` when a PR's detail/reviews/check-runs haven't changed since the last
+    /// poll. A 304 doesn't count against GitHub's rate limit, so re-polling an idle inbox — the
+    /// per-PR hydration N+1 that otherwise exhausts the hourly core limit — costs almost nothing.
+    /// Tests inject their own ephemeral session, so this is only the production default.
+    static let liveSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        // Sized to hold a large inbox's worth of PR responses so revalidation actually hits cache.
+        config.urlCache = URLCache(memoryCapacity: 8 << 20, diskCapacity: 64 << 20)
+        return URLSession(configuration: config)
+    }()
 
     func currentUser() async throws -> GitHubUser {
         let request = try makeRequest(path: "user")
@@ -294,12 +307,14 @@ struct GitHubClient: GitHubAPI {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        // GitHub sends `Cache-Control: private, max-age=60` on these endpoints, so URLSession's
-        // default policy serves a ≤60s-old cached body — after an approve/merge the re-fetched PR
-        // detail and reviews come back stale (`mergeable_state` still "blocked", the new review
-        // missing), so the Approve/Merge buttons don't update until the entry expires. The app is a
-        // live dashboard; always read through to origin so a just-mutated PR reflects its new state.
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+        // GitHub sends `Cache-Control: private, max-age=60` + an `ETag` on these endpoints. Rather
+        // than serve a ≤60s-old cached body (which left the Approve/Merge buttons stale after an
+        // approve/merge until the entry expired), always revalidate with the origin: URLSession
+        // sends `If-None-Match`, so a *changed* resource returns a fresh 200 (a just-mutated PR
+        // reflects at once — the freshness this app needs) while an *unchanged* one returns a
+        // `304 Not Modified` served from cache. A 304 doesn't count against the rate limit, so
+        // re-polling an idle inbox stops burning the hourly budget. See `liveSession`.
+        request.cachePolicy = .reloadRevalidatingCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -321,7 +336,16 @@ struct GitHubClient: GitHubAPI {
     private func executeWithResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw ClientError.http(-1) }
-        if (200..<300).contains(http.statusCode) { return (data, http) }
+        if (200..<300).contains(http.statusCode) {
+            // Success-path budget telemetry: GitHub returns the remaining allowance on every 2xx.
+            // Logged at debug so a refresh's request cost can be watched deplete — the per-poll
+            // hydration N+1 over a large PR set can exhaust the hourly core limit, and the error
+            // path only surfaces the budget once we're already limited.
+            if let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining") {
+                Log.network.debug("gh budget remaining: \(remaining, privacy: .public)")
+            }
+            return (data, http)
+        }
         // A 403/429 carrying a rate-limit signal is distinct from a plain auth/permission failure:
         // surface it as `.rateLimited` so the store backs off instead of re-polling into GitHub's
         // secondary limit.
