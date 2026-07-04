@@ -1011,7 +1011,9 @@ final class AppStoreTests: XCTestCase {
         let ts = Date()
         var fake = FakeGitHubAPI()
         fake.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
-        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        // Not-yet-mergeable (blocked) so it's skip-eligible — a mergeable PR is deliberately never
+        // skipped (see `testMergeablePRIsNotSkipped`).
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         fake.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         let store = try makeStore(api: fake)
 
@@ -1038,7 +1040,7 @@ final class AppStoreTests: XCTestCase {
         let old = Date(timeIntervalSince1970: 1_700_000_000)
         var seed = FakeGitHubAPI()
         seed.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old)]
-        seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         let store = try makeStore(api: seed)
 
@@ -1048,7 +1050,7 @@ final class AppStoreTests: XCTestCase {
 
         var next = FakeGitHubAPI()
         next.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old.addingTimeInterval(3600))]
-        next.pullRequestResult = .stub(number: 7, headSHA: "deadbeef")
+        next.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         next.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         store.makeAPI = { [next] _, _ in next }
 
@@ -1056,6 +1058,30 @@ final class AppStoreTests: XCTestCase {
         await store.awaitChecksHydration()
         // A fresh fake → its own recorder; a full refetch means the detail was fetched on it.
         XCTAssertEqual(next.recorder.pullRequestCount, 1, "an advanced updated_at must trigger a full refetch")
+    }
+
+    /// A PR whose Merge button is showing (`gate.mergeable`) is never skipped, even when unchanged:
+    /// a base-branch advance can flip its `mergeable_state` to behind/dirty without bumping
+    /// `updated_at`, and a stale Merge button would 405 on click. So it's always refetched.
+    func testMergeablePRIsNotSkipped() async throws {
+        let ts = Date()
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "clean")
+        fake.repositoryResult = .stub(push: true)
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        let detailAfterSeed = fake.recorder.pullRequestCount
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, true, "precondition: the PR is mergeable")
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertGreaterThan(
+            fake.recorder.pullRequestCount, detailAfterSeed, "a mergeable PR must be refetched, not skipped"
+        )
     }
 
     func testPollDelayHonorsRateLimitAndCadenceFloor() {

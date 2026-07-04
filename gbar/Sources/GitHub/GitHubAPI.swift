@@ -84,8 +84,11 @@ struct GitHubClient: GitHubAPI {
     /// Tests inject their own ephemeral session, so this is only the production default.
     static let liveSession: URLSession = {
         let config = URLSessionConfiguration.default
-        // Sized to hold a large inbox's worth of PR responses so revalidation actually hits cache.
-        config.urlCache = URLCache(memoryCapacity: 8 << 20, diskCapacity: 64 << 20)
+        // Memory-only, sized to hold a large inbox's worth of PR responses: keeps within-session
+        // revalidation (the steady-state poll that would otherwise exhaust the hourly limit) cheap
+        // via 304s, without writing private-repo PR/review bodies to disk at rest. A cold launch
+        // pays one full poll before the cache warms.
+        config.urlCache = URLCache(memoryCapacity: 16 << 20, diskCapacity: 0)
         return URLSession(configuration: config)
     }()
 

@@ -308,6 +308,39 @@ final class AppStoreNotificationTests: XCTestCase {
         XCTAssertTrue(spy.posts[0].body.contains("#12"))
     }
 
+    /// The checks-only skip path must still fire the CI banner: a re-run flipping the result on the
+    /// same commit doesn't bump `updated_at`, so the second poll skips the detail refetch — but
+    /// check-runs are re-read, so the flip must still notify. Deterministic (fixed `updated_at`,
+    /// blocked PR) so the skip is guaranteed to engage, unlike `testCheckStatusFlipNotifies`.
+    func testCheckStatusFlipNotifiesOnChecksOnlySkip() async throws {
+        let ts = Date()
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
+        seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        let store = try makeStore(api: seed)
+        let spy = SpyNotifier()
+        store.notifier = spy
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertTrue(spy.posts.isEmpty)
+
+        // Same `updated_at` → the second poll takes the checks-only skip (no detail refetch)…
+        var next = FakeGitHubAPI()
+        next.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        next.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
+        next.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "failure")]
+        store.makeAPI = { [next] _, _ in next }
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        // …but check-runs are still re-read, so the flip notifies without a detail refetch.
+        XCTAssertEqual(next.recorder.pullRequestCount, 0, "checks-only skip must not refetch detail")
+        XCTAssertEqual(spy.posts.count, 1)
+        XCTAssertEqual(spy.posts[0].title, "CI failed")
+    }
+
     // MARK: - Bug regressions
 
     /// Bug #1: a first poll that fails entirely must NOT seed the baseline. The first *successful*

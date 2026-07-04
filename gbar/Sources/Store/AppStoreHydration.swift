@@ -42,7 +42,12 @@ extension AppStore {
     /// gate, or `updated_at` is missing/changed.
     func reusableMark(for pr: PRFetch) -> HydrationMark? {
         guard let mark = prHydrationMark[pr.key],
-              prGates[pr.key] != nil,
+              let gate = prGates[pr.key],
+              // A shown Merge button must stay truthful: a base-branch advance can flip a PR's
+              // `mergeable_state` to behind/dirty *without* bumping its `updated_at`, and a stale
+              // "mergeable" gate would 405 on click. So never skip a mergeable PR — re-read its
+              // detail (a cheap 304 while genuinely unchanged) to catch that.
+              !gate.mergeable,
               let updated = pr.issue.updatedAt,
               mark.updatedAt == updated
         else { return nil }
