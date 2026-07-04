@@ -13,14 +13,12 @@ extension AppStore {
     ) async
     -> AccountLoad {
         var sections: [String: [SearchIssue]] = [:]
-        var sessionExpired = false
-        var errorMessage: String?
+        var failures = LoadFailures()
         for section in queries where section.isRunnable {
             do {
                 sections[section.id] = try await api.searchIssues(section.query)
             } catch {
-                let fallback = "Failed to load \(section.title)."
-                classify(error, expired: &sessionExpired, message: &errorMessage, fallback: fallback)
+                failures.classify(error, fallback: "Failed to load \(section.title).")
                 logFailure("search", account: account, error: error)
             }
         }
@@ -30,18 +28,18 @@ extension AppStore {
             notifications = try await api.notifications()
             notificationsSucceeded = true
         } catch {
-            classify(error, expired: &sessionExpired, message: &errorMessage, fallback: nil)
+            failures.classify(error, fallback: nil)
             logFailure("notifications", account: account, error: error)
         }
         // Starred is a decorative cross-tab signal — a failure here must never surface an error
-        // message (it's not a section the user asked for), only skip advancing the set.
+        // message (it's not a section the user asked for), only note auth/rate-limit and skip the set.
         var starred: [String] = []
         var starredSucceeded = false
         do {
             starred = try await api.starredRepos()
             starredSucceeded = true
         } catch {
-            if case .http(401) = error as? GitHubClient.ClientError { sessionExpired = true }
+            failures.noteDecorative(error)
             logFailure("starred", account: account, error: error)
         }
         return AccountLoad(
@@ -51,27 +49,46 @@ extension AppStore {
             notificationsSucceeded: notificationsSucceeded,
             starred: starred,
             starredSucceeded: starredSucceeded,
-            sessionExpired: sessionExpired,
-            errorMessage: errorMessage
+            sessionExpired: failures.sessionExpired,
+            errorMessage: failures.message,
+            rateLimitedUntil: failures.rateLimitedUntil
         )
     }
 
-    /// Fold one failure into a load's error state: a 401 flags the expired session; otherwise
-    /// apply `fallback` (a `nil` fallback is the inbox case — don't clobber a more important
-    /// section error already set this pass).
-    private nonisolated static func classify(
-        _ error: Error,
-        expired: inout Bool,
-        message: inout String?,
-        fallback: String?
-    ) {
-        if case .http(401) = error as? GitHubClient.ClientError {
-            expired = true
-            message = "Session expired — reconnect in Settings."
-        } else if let fallback {
-            message = fallback
-        } else if message == nil {
-            message = "Failed to load notifications."
+    /// Accumulates the failure signals from one account's load — expired session, a friendly
+    /// message, and a rate-limit reset — so the load helpers can fold each caught error in.
+    struct LoadFailures {
+        var sessionExpired = false
+        var message: String?
+        var rateLimitedUntil: Date?
+
+        /// Fold one failure in: a 401 flags the expired session; a rate limit records the reset;
+        /// otherwise apply `fallback` (a `nil` fallback is the inbox case — don't clobber a more
+        /// important section error already set this pass).
+        mutating func classify(_ error: Error, fallback: String?) {
+            switch error as? GitHubClient.ClientError {
+            case .http(401):
+                sessionExpired = true
+                message = "Session expired — reconnect in Settings."
+            case let .rateLimited(until):
+                rateLimitedUntil = until ?? Date().addingTimeInterval(60)
+                if message == nil { message = AuthErrorCopy.rateLimitMessage(until: until) }
+            default:
+                if let fallback {
+                    message = fallback
+                } else if message == nil {
+                    message = "Failed to load notifications."
+                }
+            }
+        }
+
+        /// Fold a decorative failure (starred): track auth/rate-limit but never surface a message.
+        mutating func noteDecorative(_ error: Error) {
+            switch error as? GitHubClient.ClientError {
+            case .http(401): sessionExpired = true
+            case let .rateLimited(until): rateLimitedUntil = until ?? Date().addingTimeInterval(60)
+            default: break
+            }
         }
     }
 
@@ -97,9 +114,17 @@ extension AppStore {
         let repo = item.repositorySlug
         guard let detail = try? await api.pullRequest(repo: repo, number: item.number) else {
             Log.network.debug("pr detail skip #\(item.number, privacy: .public)")
-            return PRState(checks: nil, gate: nil)
+            return PRState(checks: nil, gate: nil, head: nil)
         }
-        let checks = includeChecks ? await fetchChecks(repo: repo, detail: detail, using: api) : nil
+        let checks = includeChecks
+            ? await fetchChecks(
+                repo: repo,
+                ref: detail.head.sha,
+                branch: detail.head.ref,
+                number: item.number,
+                using: api
+            )
+            : nil
         // `alreadyApproved` is irrelevant for the viewer's own PRs (Approve is hidden
         // synchronously in the row anyway), so skip the reviews call for them — it saves a
         // request per own-PR per poll, which matters against GitHub's hourly rate limit.
@@ -110,24 +135,44 @@ extension AppStore {
             await (try? api.reviews(repo: repo, number: item.number)) ?? []
         }
         let gate = deriveGate(detail: detail, reviews: reviews, login: login, mergeInfo: mergeInfo)
-        return PRState(checks: checks, gate: gate)
+        return PRState(checks: checks, gate: gate, head: detail.head)
     }
 
-    /// Map a PR's check runs to a `PRChecks`, or nil if it has no checks or the fetch fails.
+    /// Re-fetch just a PR's check-runs against a known head sha, reusing an already-derived gate.
+    /// Used when a poll finds the PR unchanged (`updated_at` didn't advance) so the detail+reviews
+    /// refetch is skipped — but CI can still flip on the same commit (a re-run), so the check-runs
+    /// are always re-read to keep the pass/fail banner honest. Never throws; a failed checks fetch
+    /// yields a `nil` checks (dot cleared, baseline preserved), matching `fetchPRState`.
+    nonisolated static func fetchChecksState(
+        repo: String,
+        number: Int,
+        head: PullRequestDetail.Head,
+        cachedGate: PRGate,
+        using api: GitHubAPI
+    ) async
+    -> PRState {
+        let checks = await fetchChecks(repo: repo, ref: head.sha, branch: head.ref, number: number, using: api)
+        return PRState(checks: checks, gate: cachedGate, head: head)
+    }
+
+    /// Map a PR's check runs (at `ref`) to a `PRChecks`, or nil if it has no checks or the fetch
+    /// fails. `branch` labels the check rows; `number` is only for the skip log line.
     private nonisolated static func fetchChecks(
         repo: String,
-        detail: PullRequestDetail,
+        ref: String,
+        branch: String,
+        number: Int,
         using api: GitHubAPI
     ) async
     -> PRChecks? {
         do {
-            let runs = try await api.checkRuns(repo: repo, ref: detail.head.sha)
+            let runs = try await api.checkRuns(repo: repo, ref: ref)
             guard let status = runs.ciRollup else { return nil }
-            let models = runs.map { $0.checkRowModel(repo: repo, branch: detail.head.ref) }
+            let models = runs.map { $0.checkRowModel(repo: repo, branch: branch) }
             return PRChecks(status: status, checks: models)
         } catch {
             Log.network
-                .debug("ci skip #\(detail.number, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                .debug("ci skip #\(number, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
     }
@@ -135,7 +180,8 @@ extension AppStore {
     /// Derive the action gate from PR detail + reviews. Pure so it's unit-testable.
     /// - `alreadyApproved`: the viewer's *latest* definitive review (approve / changes /
     ///   dismissed — comment & pending don't count) is an approval. Relies on GitHub returning
-    ///   reviews oldest-first; the caller caps at one page (100), enough in practice.
+    ///   reviews oldest-first; the client paginates to the last page (capped) so the latest
+    ///   verdict is included even on a heavily-reviewed PR.
     /// - `mergeable`: GitHub would show a live Merge button (open, non-draft, a clean-ish
     ///   `mergeable_state`) *and* the viewer has push access. Stays optimistic where the answer
     ///   is genuinely unknown — `nil`/`"unknown"` mergeable_state (GitHub still computing after a

@@ -24,6 +24,36 @@ extension AppStore {
         let api: GitHubAPI
     }
 
+    /// A PR's state at its last successful hydration, so the next wave can cheaply refresh it.
+    struct HydrationMark {
+        /// The search `updated_at` we hydrated against. GitHub bumps it on a push/comment/label/
+        /// review, so an equal value means the gate we derived (and the reviews behind it) are
+        /// still current — the detail+reviews refetch can be skipped.
+        let updatedAt: Date
+        /// The head (sha + ref) we hydrated. Lets an unchanged poll re-read check-runs against the
+        /// same commit without re-fetching the detail (CI can still flip on a re-run).
+        let head: PullRequestDetail.Head
+    }
+
+    /// The reusable mark for a PR whose gate is still current — we hold a hydrated gate and the
+    /// PR's `updated_at` hasn't advanced since that hydration. When present, the wave skips this
+    /// PR's detail+reviews refetch and only re-reads its check-runs (see `fetchChecksState`),
+    /// turning a 3-request hydration into 1. `nil` (→ full refetch) when never hydrated, no cached
+    /// gate, or `updated_at` is missing/changed.
+    func reusableMark(for pr: PRFetch) -> HydrationMark? {
+        guard let mark = prHydrationMark[pr.key],
+              let gate = prGates[pr.key],
+              // A shown Merge button must stay truthful: a base-branch advance can flip a PR's
+              // `mergeable_state` to behind/dirty *without* bumping its `updated_at`, and a stale
+              // "mergeable" gate would 405 on click. So never skip a mergeable PR — re-read its
+              // detail (a cheap 304 while genuinely unchanged) to catch that.
+              !gate.mergeable,
+              let updated = pr.issue.updatedAt,
+              mark.updatedAt == updated
+        else { return nil }
+        return mark
+    }
+
     /// Distinct `(account, PR)` fetches — the same PR can appear in several sections, and each
     /// account has its own client.
     func distinctPRFetches(from sections: [LoadedSection], apis: [Account.ID: GitHubAPI]) -> [PRFetch] {
@@ -79,6 +109,10 @@ extension AppStore {
     func startMergeReadinessPoll(for item: AccountItem, using api: GitHubAPI) {
         mergeReadinessTask?.cancel()
         mergeReadinessTask = Task { [weak self] in
+            // Drop our own reference on normal completion so a finished poll doesn't linger
+            // (matching `checksTask`/`repoFeedsTask`). If we were cancelled, a newer poll already
+            // owns `mergeReadinessTask`, so leave it be.
+            defer { if !Task.isCancelled { self?.mergeReadinessTask = nil } }
             for delay in Self.approveRefreshRetryDelays {
                 await self?.sleep(delay)
                 guard let self, !Task.isCancelled, self.isSignedIn else { return }
@@ -154,10 +188,12 @@ extension AppStore {
         // linger (and `prChecks` can't grow unbounded). Prune the notification baseline the same
         // way so a PR that leaves every section doesn't retain a stale `lastCheckStatus` (bug #5).
         // A PR still in the list but whose fetch fails keeps its key here (it's in `prs`), so its
-        // baseline survives — that's what protects bug #3.
+        // baseline survives — that's what protects bug #3. The mark is pruned alongside so an
+        // unchanged PR that stays in the list keeps its reuse hint.
         let live = Set(prs.map(\.key))
         prChecks = prChecks.filter { live.contains($0.key) }
         prGates = prGates.filter { live.contains($0.key) }
+        prHydrationMark = prHydrationMark.filter { live.contains($0.key) }
         lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
         guard !prs.isEmpty else {
             checksTask = nil
@@ -195,41 +231,79 @@ extension AppStore {
         issueByKey: [PRCheckKey: SearchIssue],
         generation: Int
     ) async {
+        // Decide each PR's plan on the actor (reading `prGates`/`prHydrationMark`), so the
+        // nonisolated `schedule()` below just spawns from the precomputed list.
+        let plans = fetchPlans(for: prs, mergeInfoByKey: mergeInfoByKey)
         await withTaskGroup(of: (PRCheckKey, PRState).self) { group in
             var next = 0
             func schedule() {
-                guard next < prs.count else { return }
-                let pr = prs[next]
+                guard next < plans.count else { return }
+                let plan = plans[next]
                 next += 1
-                let mergeInfo = mergeInfoByKey[pr.key]
-                group.addTask {
-                    await (
-                        pr.key,
-                        Self.fetchPRState(for: pr.issue, login: pr.login, mergeInfo: mergeInfo, using: pr.api)
-                    )
-                }
+                group.addTask { await Self.fetchState(plan) }
             }
             for _ in 0..<Self.checksConcurrency {
                 schedule()
             }
             // Seed from the (already pruned) live maps so absent keys stay absent.
-            var pendingChecks = prChecks
-            var pendingGates = prGates
+            var pending = PendingHydration(checks: prChecks, gates: prGates, marks: prHydrationMark)
             var sinceFlush = 0
             while let (key, state) = await group.next() {
                 guard checksGeneration == generation else { continue }
-                fold(key: key, state: state, issueByKey: issueByKey, checks: &pendingChecks, gates: &pendingGates)
+                fold(key: key, state: state, issueByKey: issueByKey, into: &pending)
                 sinceFlush += 1
                 if sinceFlush >= Self.checksFlushBatch {
-                    publishChecks(pendingChecks, gates: pendingGates, generation: generation)
+                    publishChecks(pending, generation: generation)
                     sinceFlush = 0
                 }
                 schedule()
             }
             if sinceFlush > 0 {
-                publishChecks(pendingChecks, gates: pendingGates, generation: generation)
+                publishChecks(pending, generation: generation)
             }
         }
+    }
+
+    /// One PR's hydration plan: a full detail+reviews+checks fetch, or — for a PR unchanged since
+    /// its last hydration — a cheap checks-only refresh reusing the cached head and gate.
+    enum FetchPlan {
+        case full(PRFetch, mergeInfo: RepoMergeInfo?)
+        case checksOnly(PRFetch, head: PullRequestDetail.Head, gate: PRGate)
+    }
+
+    /// Resolve each PR's plan: checks-only when its gate is still current (see `reusableMark`),
+    /// else a full refetch. Reads actor state, so it runs before the task group is spawned.
+    private func fetchPlans(for prs: [PRFetch], mergeInfoByKey: [PRCheckKey: RepoMergeInfo]) -> [FetchPlan] {
+        prs.map { pr in
+            if let mark = reusableMark(for: pr), let gate = prGates[pr.key] {
+                .checksOnly(pr, head: mark.head, gate: gate)
+            } else {
+                .full(pr, mergeInfo: mergeInfoByKey[pr.key])
+            }
+        }
+    }
+
+    /// Execute one plan off-actor, tagged with its key for the drain loop.
+    nonisolated static func fetchState(_ plan: FetchPlan) async -> (PRCheckKey, PRState) {
+        switch plan {
+        case let .full(pr, mergeInfo):
+            await (pr.key, fetchPRState(for: pr.issue, login: pr.login, mergeInfo: mergeInfo, using: pr.api))
+        case let .checksOnly(pr, head, gate):
+            await (
+                pr.key,
+                fetchChecksState(
+                    repo: pr.issue.repositorySlug, number: pr.issue.number, head: head, cachedGate: gate, using: pr.api
+                )
+            )
+        }
+    }
+
+    /// The three hydration maps a drain accumulates before publishing, bundled so the fold/publish
+    /// helpers stay within the parameter-count limit.
+    struct PendingHydration {
+        var checks: [PRCheckKey: PRChecks]
+        var gates: [PRCheckKey: PRGate]
+        var marks: [PRCheckKey: HydrationMark]
     }
 
     /// Fold one completed PR's resolved state into the pending hydration maps, firing a pass/fail
@@ -240,25 +314,35 @@ extension AppStore {
         key: PRCheckKey,
         state: PRState,
         issueByKey: [PRCheckKey: SearchIssue],
-        checks: inout [PRCheckKey: PRChecks],
-        gates: inout [PRCheckKey: PRGate]
+        into pending: inout PendingHydration
     ) {
-        gates[key] = state.gate
+        pending.gates[key] = state.gate
         if let resolved = state.checks {
             if let issue = issueByKey[key] {
                 notifyCheckStatusChange(key: key, pr: issue, newStatus: resolved.status)
             }
-            checks[key] = resolved
+            pending.checks[key] = resolved
         } else {
-            checks[key] = nil
+            pending.checks[key] = nil
+        }
+        // Record the reuse hint only on a real hydration (a gate and head came back) with a known
+        // `updated_at`; a failed detail fetch (nil gate/head) clears any mark so it's fully retried.
+        // On a checks-only refresh the gate/head are the carried-over cached ones, so the mark just
+        // renews unchanged.
+        if state.gate != nil, let head = state.head, let updated = issueByKey[key]?.updatedAt {
+            pending.marks[key] = HydrationMark(updatedAt: updated, head: head)
+        } else {
+            pending.marks[key] = nil
         }
     }
 
     /// Publish a hydration batch as single whole-map assignments (one view invalidation each),
-    /// unless a newer wave has superseded this one.
-    private func publishChecks(_ checks: [PRCheckKey: PRChecks], gates: [PRCheckKey: PRGate], generation: Int) {
+    /// unless a newer wave has superseded this one. The marks are view-invisible but published here
+    /// too so they stay consistent with the gates/checks they describe.
+    private func publishChecks(_ pending: PendingHydration, generation: Int) {
         guard checksGeneration == generation else { return }
-        prGates = gates
-        prChecks = checks
+        prGates = pending.gates
+        prChecks = pending.checks
+        prHydrationMark = pending.marks
     }
 }

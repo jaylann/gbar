@@ -59,17 +59,38 @@ struct GitHubClient: GitHubAPI {
     enum ClientError: Error, Equatable {
         case http(Int)
         case badURL
+        /// GitHub reported a primary/secondary rate limit (403/429 with a rate-limit header).
+        /// `until` is when access is expected back, from `Retry-After` or `X-RateLimit-Reset`
+        /// (nil when GitHub sent neither). The poll loop backs off to this time instead of
+        /// hammering the same cadence into a longer lockout.
+        case rateLimited(until: Date?)
     }
 
     let baseURL: URL
     let token: String
     private let session: URLSession
 
-    init(baseURL: URL, token: String, session: URLSession = .shared) {
+    init(baseURL: URL, token: String, session: URLSession = Self.liveSession) {
         self.baseURL = baseURL
         self.token = token
         self.session = session
     }
+
+    /// The session backing every live request. Its private `URLCache` lets conditional requests
+    /// (`If-None-Match`, driven by the per-request `.reloadRevalidatingCacheData` policy) return a
+    /// `304 Not Modified` when a PR's detail/reviews/check-runs haven't changed since the last
+    /// poll. A 304 doesn't count against GitHub's rate limit, so re-polling an idle inbox — the
+    /// per-PR hydration N+1 that otherwise exhausts the hourly core limit — costs almost nothing.
+    /// Tests inject their own ephemeral session, so this is only the production default.
+    static let liveSession: URLSession = {
+        let config = URLSessionConfiguration.default
+        // Memory-only, sized to hold a large inbox's worth of PR responses: keeps within-session
+        // revalidation (the steady-state poll that would otherwise exhaust the hourly limit) cheap
+        // via 304s, without writing private-repo PR/review bodies to disk at rest. A cold launch
+        // pays one full poll before the cache warms.
+        config.urlCache = URLCache(memoryCapacity: 16 << 20, diskCapacity: 0)
+        return URLSession(configuration: config)
+    }()
 
     func currentUser() async throws -> GitHubUser {
         let request = try makeRequest(path: "user")
@@ -101,13 +122,32 @@ struct GitHubClient: GitHubAPI {
         return try Self.decoder.decode(PullRequestDetail.self, from: data)
     }
 
+    /// Max pages of reviews to walk. `reviewsPerPage` (100) × this cap bounds the fetch on a
+    /// pathologically-reviewed PR while still reaching well past the first page.
+    static let reviewsPageCap = 10
+    static let reviewsPerPage = 100
+
     func reviews(repo: String, number: Int) async throws -> [PullRequestReview] {
-        let request = try makeRequest(
-            path: "repos/\(repo)/pulls/\(number)/reviews",
-            queryItems: [URLQueryItem(name: "per_page", value: "100")]
-        )
-        let data = try await execute(request)
-        return try Self.decoder.decode([PullRequestReview].self, from: data)
+        // GitHub returns reviews ascending by `submitted_at`, and the gate derivation relies on
+        // "the viewer's *last* definitive review wins" — so a busy PR with more than one page of
+        // reviews must be walked to the end, not truncated at the first 100 (which would keep only
+        // the oldest reviews and drop the current verdict). Paginate via the `Link` header, capped.
+        var all: [PullRequestReview] = []
+        var page = 1
+        while page <= Self.reviewsPageCap {
+            let request = try makeRequest(
+                path: "repos/\(repo)/pulls/\(number)/reviews",
+                queryItems: [
+                    URLQueryItem(name: "per_page", value: String(Self.reviewsPerPage)),
+                    URLQueryItem(name: "page", value: String(page)),
+                ]
+            )
+            let (data, response) = try await executeWithResponse(request)
+            try all.append(contentsOf: Self.decoder.decode([PullRequestReview].self, from: data))
+            guard Self.hasNextPage(response) else { return all }
+            page += 1
+        }
+        return all
     }
 
     func repository(repo: String) async throws -> RepositoryInfo {
@@ -216,9 +256,33 @@ struct GitHubClient: GitHubAPI {
     /// A JSON decoder configured the way every GitHub response expects.
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let string = try container.decode(String.self)
+            guard let date = parseISO8601(string) else {
+                throw DecodingError.dataCorruptedError(
+                    in: container,
+                    debugDescription: "Invalid ISO8601 date: \(string)"
+                )
+            }
+            return date
+        }
         return decoder
     }()
+
+    /// GitHub currently emits second-precision `Z` timestamps, but an endpoint or GHE version can
+    /// send fractional seconds (`…:05.123Z`). Accept both so one such field can't fail the entire
+    /// page decode (which the plain `.iso8601` strategy would).
+    ///
+    /// Uses the `Sendable` value-type `Date.ISO8601FormatStyle` rather than a shared
+    /// `ISO8601DateFormatter` (which is not documented thread-safe) — this parser runs
+    /// concurrently across accounts inside `performRefresh`'s `TaskGroup`.
+    private static func parseISO8601(_ string: String) -> Date? {
+        (try? isoFractional.parse(string)) ?? (try? isoPlain.parse(string))
+    }
+
+    private static let isoFractional = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
+    private static let isoPlain = Date.ISO8601FormatStyle()
 
     /// A shared JSON encoder for request bodies — cheaper than allocating one per request.
     private static let encoder = JSONEncoder()
@@ -240,15 +304,20 @@ struct GitHubClient: GitHubAPI {
         }
         components.queryItems = queryItems
         guard let url = components.url else { throw ClientError.badURL }
+        // Never send the bearer token over cleartext: reject a non-https base URL (e.g. a
+        // misconfigured Enterprise host pasted as `http://…`) rather than leaking credentials.
+        guard url.scheme?.lowercased() == "https" else { throw ClientError.badURL }
 
         var request = URLRequest(url: url)
         request.httpMethod = method
-        // GitHub sends `Cache-Control: private, max-age=60` on these endpoints, so URLSession's
-        // default policy serves a ≤60s-old cached body — after an approve/merge the re-fetched PR
-        // detail and reviews come back stale (`mergeable_state` still "blocked", the new review
-        // missing), so the Approve/Merge buttons don't update until the entry expires. The app is a
-        // live dashboard; always read through to origin so a just-mutated PR reflects its new state.
-        request.cachePolicy = .reloadIgnoringLocalCacheData
+        // GitHub sends `Cache-Control: private, max-age=60` + an `ETag` on these endpoints. Rather
+        // than serve a ≤60s-old cached body (which left the Approve/Merge buttons stale after an
+        // approve/merge until the entry expired), always revalidate with the origin: URLSession
+        // sends `If-None-Match`, so a *changed* resource returns a fresh 200 (a just-mutated PR
+        // reflects at once — the freshness this app needs) while an *unchanged* one returns a
+        // `304 Not Modified` served from cache. A 304 doesn't count against the rate limit, so
+        // re-polling an idle inbox stops burning the hourly budget. See `liveSession`.
+        request.cachePolicy = .reloadRevalidatingCacheData
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -269,9 +338,38 @@ struct GitHubClient: GitHubAPI {
     /// non-2xx status. Used where a response header matters (e.g. the `Link` pagination cursor).
     private func executeWithResponse(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            throw ClientError.http((response as? HTTPURLResponse)?.statusCode ?? -1)
+        guard let http = response as? HTTPURLResponse else { throw ClientError.http(-1) }
+        if (200..<300).contains(http.statusCode) {
+            // Success-path budget telemetry: GitHub returns the remaining allowance on every 2xx.
+            // Logged at debug so a refresh's request cost can be watched deplete — the per-poll
+            // hydration N+1 over a large PR set can exhaust the hourly core limit, and the error
+            // path only surfaces the budget once we're already limited.
+            if let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining") {
+                Log.network.debug("gh budget remaining: \(remaining, privacy: .public)")
+            }
+            return (data, http)
         }
-        return (data, http)
+        // A 403/429 carrying a rate-limit signal is distinct from a plain auth/permission failure:
+        // surface it as `.rateLimited` so the store backs off instead of re-polling into GitHub's
+        // secondary limit.
+        if http.statusCode == 403 || http.statusCode == 429 {
+            let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining")
+            if remaining == "0" || http.value(forHTTPHeaderField: "Retry-After") != nil {
+                throw ClientError.rateLimited(until: Self.rateLimitReset(from: http))
+            }
+        }
+        throw ClientError.http(http.statusCode)
+    }
+
+    /// When GitHub says access resumes, from `Retry-After` (relative seconds) or the absolute
+    /// `X-RateLimit-Reset` epoch; nil when neither header is present.
+    private static func rateLimitReset(from http: HTTPURLResponse) -> Date? {
+        if let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) {
+            return Date().addingTimeInterval(retryAfter)
+        }
+        if let reset = http.value(forHTTPHeaderField: "X-RateLimit-Reset").flatMap(Double.init) {
+            return Date(timeIntervalSince1970: reset)
+        }
+        return nil
     }
 }
