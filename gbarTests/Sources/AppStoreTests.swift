@@ -381,6 +381,56 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.prChecks[key(300)])
     }
 
+    /// #84: the merge-readiness poll writes a freshly-unblocked gate (`refreshPRState`) while a
+    /// hydration wave is mid-flight. That wave snapshotted `prGates` (blocked) before the write and
+    /// republishes it as a whole map — which would clobber the poll's write back to "blocked" and
+    /// re-hide Merge. The publish must overlay the poll's live write instead.
+    func testMergePollGateWriteSurvivesConcurrentHydrationRepublish() async throws {
+        // A stable PR shared by both waves so its `updated_at` doesn't drift (keeps the second wave
+        // deterministic — it reuses the cached "blocked" gate as its pre-fetch snapshot).
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        // First wave: seed a "blocked" gate (and the repo push-access merge info) via a plain fake.
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "blocked")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked
+
+        // Second wave: block inside `checkRuns` so it's parked with the stale "blocked" snapshot in
+        // its pending map, having not yet republished.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "blocked"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // While the wave is parked, the merge poll observes the recompute and writes the unblocked
+        // gate directly to `prGates` under the same generation.
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let refreshed = await store.refreshPRState(for: pr, using: cleanFake)
+        XCTAssertEqual(refreshed?.mergeable, true) // poll saw the unblock
+
+        // Release the wave: its whole-map republish must preserve the poll's write, not clobber it.
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
+    }
+
     // MARK: - Action gate derivation
 
     func testDeriveGateMergeableStates() {

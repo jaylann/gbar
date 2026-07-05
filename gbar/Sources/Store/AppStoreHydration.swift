@@ -94,6 +94,9 @@ extension AppStore {
         guard checksGeneration == generation else { return prGates[key] }
         guard let gate = state.gate else { return prGates[key] } // failed fetch — keep the old gate
         prGates[key] = gate
+        // Mark this key so a concurrent wave's whole-map republish preserves it instead of
+        // clobbering it back to its pre-fetch snapshot (#84).
+        mergePollGateWrites.insert(key)
         return gate
     }
 
@@ -183,6 +186,9 @@ extension AppStore {
         // Supersede any previous wave so it stops firing requests and can't clobber this one.
         checksTask?.cancel()
         checksGeneration += 1
+        // This wave re-fetches every key fresh, so any merge-poll writes tracked for the previous
+        // generation are moot (#84).
+        mergePollGateWrites.removeAll()
         let prs = distinctPRFetches(from: sections, apis: apis)
         // Prune entries for PRs no longer in the list so a dropped-out PR's stale CI dot can't
         // linger (and `prChecks` can't grow unbounded). Prune the notification baseline the same
@@ -341,7 +347,15 @@ extension AppStore {
     /// too so they stay consistent with the gates/checks they describe.
     private func publishChecks(_ pending: PendingHydration, generation: Int) {
         guard checksGeneration == generation else { return }
-        prGates = pending.gates
+        var gates = pending.gates
+        // Preserve single-key gates the merge-readiness poll wrote under this generation: they're
+        // fresher than this wave's pre-fetch snapshot (esp. a `.checksOnly` skip's stale cached
+        // gate). A whole-map reassign would otherwise clobber them (#84). Skip keys the wave
+        // pruned so a dropped-out PR isn't re-added.
+        for key in mergePollGateWrites where pending.gates[key] != nil {
+            if let live = prGates[key] { gates[key] = live }
+        }
+        prGates = gates
         prChecks = pending.checks
         prHydrationMark = pending.marks
     }
