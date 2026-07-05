@@ -431,6 +431,54 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
     }
 
+    /// The symmetric case: the wave's *fresher* full-fetch must win over an older poll write. If the
+    /// poll saw "mergeable" earlier but the base branch has since advanced (wave fetches "behind"),
+    /// the recency merge must publish the wave's not-mergeable gate — not resurrect the stale poll
+    /// gate and show a Merge button that would 405. (A naive "poll write always wins" overlay
+    /// regresses here.)
+    func testFreshWaveFetchWinsOverStalerMergePollGate() async throws {
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        // First wave: seed a *mergeable* "clean" gate — so the second wave can't skip to checks-only
+        // (`reusableMark` never skips a mergeable PR) and instead does a fresh full re-fetch.
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, true) // seeded mergeable
+
+        // Second wave: full-fetches "behind" (base advanced) and blocks in `checkRuns` — its gate is
+        // derived (not-mergeable) but not yet folded.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "behind"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // While parked, a stale poll observation writes "clean" (mergeable) — an *earlier* write than
+        // the wave's imminent fold.
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = []
+        _ = await store.refreshPRState(for: pr, using: cleanFake)
+
+        await gated.release()
+        await wave?.value
+
+        XCTAssertFalse(try XCTUnwrap(store.gate(for: pr)).mergeable) // fresher "behind" wins → Merge hidden
+    }
+
     // MARK: - Action gate derivation
 
     func testDeriveGateMergeableStates() {

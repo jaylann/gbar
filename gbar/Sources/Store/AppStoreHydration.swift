@@ -94,10 +94,16 @@ extension AppStore {
         guard checksGeneration == generation else { return prGates[key] }
         guard let gate = state.gate else { return prGates[key] } // failed fetch — keep the old gate
         prGates[key] = gate
-        // Mark this key so a concurrent wave's whole-map republish preserves it instead of
-        // clobbering it back to its pre-fetch snapshot (#84).
-        mergePollGateWrites.insert(key)
+        // Stamp the write so a concurrent wave's batch republish keeps this fresh gate unless it
+        // fetched the same key *more recently* — see `gateWriteClock`/`publishChecks` (#84).
+        prGateSeq[key] = nextGateWriteSeq()
         return gate
+    }
+
+    /// Advance and return the next `prGates` write-clock tick.
+    func nextGateWriteSeq() -> Int {
+        gateWriteClock += 1
+        return gateWriteClock
     }
 
     /// After an approval that didn't immediately unblock Merge, poll the PR's gate in the
@@ -186,9 +192,6 @@ extension AppStore {
         // Supersede any previous wave so it stops firing requests and can't clobber this one.
         checksTask?.cancel()
         checksGeneration += 1
-        // This wave re-fetches every key fresh, so any merge-poll writes tracked for the previous
-        // generation are moot (#84).
-        mergePollGateWrites.removeAll()
         let prs = distinctPRFetches(from: sections, apis: apis)
         // Prune entries for PRs no longer in the list so a dropped-out PR's stale CI dot can't
         // linger (and `prChecks` can't grow unbounded). Prune the notification baseline the same
@@ -199,6 +202,7 @@ extension AppStore {
         let live = Set(prs.map(\.key))
         prChecks = prChecks.filter { live.contains($0.key) }
         prGates = prGates.filter { live.contains($0.key) }
+        prGateSeq = prGateSeq.filter { live.contains($0.key) }
         prHydrationMark = prHydrationMark.filter { live.contains($0.key) }
         lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
         guard !prs.isEmpty else {
@@ -240,6 +244,11 @@ extension AppStore {
         // Decide each PR's plan on the actor (reading `prGates`/`prHydrationMark`), so the
         // nonisolated `schedule()` below just spawns from the precomputed list.
         let plans = fetchPlans(for: prs, mergeInfoByKey: mergeInfoByKey)
+        // Keys the wave re-derives a gate for (a full fetch). A checks-only plan carries the cached
+        // gate unchanged, so its gate isn't "fresh" and must not overwrite a newer poll write (#84).
+        let fullFetchKeys = Set(plans.compactMap { plan -> PRCheckKey? in
+            if case let .full(pr, _) = plan { pr.key } else { nil }
+        })
         await withTaskGroup(of: (PRCheckKey, PRState).self) { group in
             var next = 0
             func schedule() {
@@ -256,7 +265,8 @@ extension AppStore {
             var sinceFlush = 0
             while let (key, state) = await group.next() {
                 guard checksGeneration == generation else { continue }
-                fold(key: key, state: state, issueByKey: issueByKey, into: &pending)
+                let isFresh = fullFetchKeys.contains(key) && state.gate != nil
+                fold(key: key, state: state, issueByKey: issueByKey, isFreshGate: isFresh, into: &pending)
                 sinceFlush += 1
                 if sinceFlush >= Self.checksFlushBatch {
                     publishChecks(pending, generation: generation)
@@ -310,6 +320,11 @@ extension AppStore {
         var checks: [PRCheckKey: PRChecks]
         var gates: [PRCheckKey: PRGate]
         var marks: [PRCheckKey: HydrationMark]
+        /// Write-clock ticks for the keys this wave *freshly* re-fetched a gate for (a successful
+        /// full fetch — not a checks-only carry-over or a failed fetch). Only these keys are
+        /// eligible to overwrite the live gate at publish, and only when their tick beats the live
+        /// `prGateSeq` (so a newer merge-poll write is preserved, #84).
+        var freshGateSeq: [PRCheckKey: Int] = [:]
     }
 
     /// Fold one completed PR's resolved state into the pending hydration maps, firing a pass/fail
@@ -320,9 +335,16 @@ extension AppStore {
         key: PRCheckKey,
         state: PRState,
         issueByKey: [PRCheckKey: SearchIssue],
+        isFreshGate: Bool,
         into pending: inout PendingHydration
     ) {
         pending.gates[key] = state.gate
+        // A freshly re-derived gate is stamped so publish can compare its recency against a
+        // concurrent merge-poll write for the same key (#84). A checks-only carry-over or a failed
+        // fetch is not fresh — it leaves the live gate (and its stamp) untouched at publish.
+        if isFreshGate {
+            pending.freshGateSeq[key] = nextGateWriteSeq()
+        }
         if let resolved = state.checks {
             if let issue = issueByKey[key] {
                 notifyCheckStatusChange(key: key, pr: issue, newStatus: resolved.status)
@@ -345,17 +367,26 @@ extension AppStore {
     /// Publish a hydration batch as single whole-map assignments (one view invalidation each),
     /// unless a newer wave has superseded this one. The marks are view-invisible but published here
     /// too so they stay consistent with the gates/checks they describe.
+    ///
+    /// Checks and marks are reassigned wholesale from the batch, but **gates merge by write
+    /// recency** onto the live map: only keys this wave *freshly* re-fetched (`freshGateSeq`)
+    /// overwrite the live gate, and only when their tick beats the live `prGateSeq`. This keeps a
+    /// concurrent merge-readiness poll's newer single-key write from being clobbered by an older
+    /// snapshot (#84), while a genuinely fresher wave fetch still wins. Keys the wave didn't
+    /// freshly fetch (a checks-only carry-over, or a failed fetch) keep their live gate rather than
+    /// blanking it on a transient miss.
     private func publishChecks(_ pending: PendingHydration, generation: Int) {
         guard checksGeneration == generation else { return }
-        var gates = pending.gates
-        // Preserve single-key gates the merge-readiness poll wrote under this generation: they're
-        // fresher than this wave's pre-fetch snapshot (esp. a `.checksOnly` skip's stale cached
-        // gate). A whole-map reassign would otherwise clobber them (#84). Skip keys the wave
-        // pruned so a dropped-out PR isn't re-added.
-        for key in mergePollGateWrites where pending.gates[key] != nil {
-            if let live = prGates[key] { gates[key] = live }
+        var gates = prGates
+        var seqs = prGateSeq
+        for (key, seq) in pending.freshGateSeq where seq > (seqs[key] ?? .min) {
+            if let gate = pending.gates[key] {
+                gates[key] = gate
+                seqs[key] = seq
+            }
         }
         prGates = gates
+        prGateSeq = seqs
         prChecks = pending.checks
         prHydrationMark = pending.marks
     }

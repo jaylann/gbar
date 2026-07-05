@@ -43,15 +43,18 @@ final class AppStore {
     /// hydrated → the row stays optimistic (buttons show). Written only by the hydration wave
     /// and the reset sites here; views read only.
     var prGates: [PRCheckKey: PRGate] = [:]
-    /// PR gate keys the merge-readiness poll (`refreshPRState`) wrote under the current
-    /// `checksGeneration`. A concurrent hydration wave republishes `prGates` as a whole-map
-    /// assignment from a snapshot taken *before* these single-key writes; without this, that
-    /// republish clobbers a freshly-unblocked gate and re-hides Merge (#84). `publishChecks`
-    /// overlays these keys from the live map so the poll's write survives. Cleared at the start
-    /// of every wave (`hydrateChecks`), which re-fetches every key fresh. `@ObservationIgnored`:
-    /// bookkeeping, never read from a view.
+    /// Monotonic write clock for `prGates`. Both writers — the hydration wave's fresh full-fetch
+    /// (`publishChecks`) and the merge-readiness poll's single-key write (`refreshPRState`) —
+    /// stamp their keys with the next tick, so a batch republish can resolve each key by
+    /// write-recency instead of clobbering a newer poll write with an older pre-fetch snapshot
+    /// (#84) — while a genuinely fresher wave fetch still wins. Bookkeeping, never read from a
+    /// view.
     @ObservationIgnored
-    var mergePollGateWrites: Set<PRCheckKey> = []
+    var gateWriteClock = 0
+    /// The `gateWriteClock` tick at which each live `prGates[key]` value was last established by a
+    /// genuine fetch (see `gateWriteClock`). Pruned alongside `prGates`.
+    @ObservationIgnored
+    var prGateSeq: [PRCheckKey: Int] = [:]
     /// What each PR looked like at its last successful hydration — the `updated_at` we hydrated
     /// against and whether its CI had settled. Lets the next wave skip the detail/reviews/check-runs
     /// refetch for a PR that hasn't changed (see `canSkipHydration`). Never read from a view, so
@@ -715,6 +718,7 @@ extension AppStore {
         notifications.removeAll { $0.account.id == id }
         prChecks = prChecks.filter { $0.key.accountID != id }
         prGates = prGates.filter { $0.key.accountID != id }
+        prGateSeq = prGateSeq.filter { $0.key.accountID != id }
         repoMergeInfo = repoMergeInfo.filter { !$0.key.hasPrefix("\(id)\n") }
         starredByAccount[id] = nil
         actionRuns.removeAll { $0.account.id == id }
@@ -764,6 +768,7 @@ extension AppStore {
         notifications = []
         prChecks = [:]
         prGates = [:]
+        prGateSeq = [:]
         prHydrationMark = [:]
         repoMergeInfo = [:]
         starredByAccount = [:]
