@@ -142,10 +142,17 @@ extension GitHubGraphQL {
 /// are the dynamic `r{i}` PR aliases.
 private struct GraphQLDynamicKey: CodingKey {
     var stringValue: String
-    var intValue: Int? { nil }
+    var intValue: Int? {
+        nil
+    }
 
-    init(stringValue: String) { self.stringValue = stringValue }
-    init?(intValue _: Int) { nil }
+    init(stringValue: String) {
+        self.stringValue = stringValue
+    }
+
+    init?(intValue _: Int) {
+        nil
+    }
 }
 
 // MARK: - Mapping to REST value types

@@ -90,7 +90,8 @@ final class GraphQLPRMappingTests: XCTestCase {
             ("UNKNOWN", nil), ("DRAFT", nil),
         ]
         for (graphQL, expected) in cases {
-            let bundle = try XCTUnwrap(GitHubGraphQL.decodeBatch(fixture(mergeStateStatus: graphQL), for: refs)[refs[0]])
+            let bundle = try XCTUnwrap(GitHubGraphQL
+                .decodeBatch(fixture(mergeStateStatus: graphQL), for: refs)[refs[0]])
             XCTAssertEqual(bundle.detail.mergeableState, expected, "\(graphQL) should map to \(expected ?? "nil")")
         }
     }

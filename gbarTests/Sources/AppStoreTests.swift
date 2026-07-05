@@ -364,6 +364,32 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.prChecks[key(100)]?.status, .success, "REST fallback still hydrates CI")
     }
 
+    /// A per-node null (a PR the batch couldn't resolve) falls back to per-PR REST for *only* that
+    /// PR while its account-mates hydrate via GraphQL in the same wave — the mixed path that
+    /// publishes GraphQL state then folds REST state on top. Exactly one batch, exactly one per-PR
+    /// REST detail/checks pair (for the omitted PR), and both PRs land hydrated.
+    func testGraphQLBatchPartialFallbackHydratesOmittedPRViaREST() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [
+            SearchIssue.stub(id: 100, number: 7, repo: "octo/a"),
+            SearchIssue.stub(id: 200, number: 8, repo: "octo/b"),
+        ]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", headRef: "feature/ci", mergeableState: "clean")
+        fake.checkRunsResult = [.stub(id: 1, name: "CI / build", conclusion: "success")]
+        fake.repositoryResult = .stub(push: true)
+        fake.batchOmittedRefs = [PRRef(repo: "octo/b", number: 8)] // batch can't resolve this one
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        XCTAssertEqual(fake.recorder.batchCount, 1, "one GraphQL round-trip for the account")
+        XCTAssertEqual(fake.recorder.pullRequestCount, 1, "only the omitted PR hits per-PR REST detail")
+        XCTAssertEqual(fake.recorder.checkRunsCount, 1, "only the omitted PR hits per-PR REST check-runs")
+        XCTAssertEqual(store.prChecks[key(100)]?.status, .success, "resolved PR hydrated via GraphQL")
+        XCTAssertEqual(store.prChecks[key(200)]?.status, .success, "omitted PR hydrated via REST fallback")
+    }
+
     func testRefreshWithNoCheckRunsLeavesPRUnhydrated() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = [SearchIssue.stub(id: 200, number: 8)]

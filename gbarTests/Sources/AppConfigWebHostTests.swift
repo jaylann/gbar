@@ -51,6 +51,13 @@ final class AppConfigWebHostTests: XCTestCase {
         XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "http://ghe.internal:3000/api/graphql")
     }
 
+    func testEnterpriseCloudDataResidencyGraphQLEndpoint() throws {
+        // GHE Cloud with data residency serves GraphQL at `/graphql` on the `api.`-prefixed
+        // host (no `/api` segment) — unlike GHE Server's `/api/graphql`.
+        let api = try XCTUnwrap(URL(string: "https://api.acme.ghe.com"))
+        XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "https://api.acme.ghe.com/graphql")
+    }
+
     func testUnparsableGraphQLFallsBackToPublicEndpoint() throws {
         let api = try XCTUnwrap(URL(string: "file:///local/path"))
         XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "https://api.github.com/graphql")

@@ -147,6 +147,10 @@ struct FakeGitHubAPI: GitHubAPI {
     /// When set, `pullRequestBatch` throws this — simulates the GraphQL path being unavailable
     /// (a GHE server missing a field, a transport error) so the store's REST fallback is testable.
     var batchError: Error?
+    /// Refs `pullRequestBatch` omits from its returned map — simulates a per-node null (a repo/PR
+    /// the viewer can't resolve). The store falls those individual PRs back to per-PR REST while
+    /// still hydrating the resolved refs via GraphQL, so the mixed-wave path is testable.
+    var batchOmittedRefs: Set<PRRef> = []
     /// Returned by `currentUser()` — the account a token resolves to when validated/added.
     var currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
     /// Returned by `starredRepos()` — the `owner/name` slugs the account has starred.
@@ -207,6 +211,7 @@ struct FakeGitHubAPI: GitHubAPI {
         let canMerge = (perms?.push ?? false) || (perms?.maintain ?? false) || (perms?.admin ?? false)
         let mergeInfo = RepoMergeInfo(canMerge: canMerge, allowedMethods: repositoryResult.allowedMergeMethods)
         return refs.reduce(into: [:]) { result, ref in
+            guard !batchOmittedRefs.contains(ref) else { return } // per-node null → REST fallback for this one
             result[ref] = PullRequestBundle(
                 detail: pullRequestResult,
                 reviews: reviewsResult,

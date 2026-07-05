@@ -19,7 +19,7 @@ enum MergeMethod: String, CaseIterable {
 }
 
 /// One PR to hydrate in a batch: repo `owner/name` slug + number.
-struct PRRef: Hashable, Sendable {
+struct PRRef: Hashable {
     let repo: String
     let number: Int
 }
@@ -28,7 +28,7 @@ struct PRRef: Hashable, Sendable {
 /// decoded shapes the REST path produces — so the store's existing `deriveGate`/`ciRollup` logic
 /// consumes a batched result unchanged. `mergeInfo` is nil when GraphQL omitted the repo's
 /// permissions (→ an optimistic gate, matching a missing `repoMergeInfo` cache entry).
-struct PullRequestBundle: Sendable {
+struct PullRequestBundle {
     let detail: PullRequestDetail
     let reviews: [PullRequestReview]
     let checkRuns: [CheckRun]
