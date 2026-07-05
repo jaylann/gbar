@@ -258,6 +258,11 @@ extension AppStore {
         for (_, accountPRs) in Dictionary(grouping: prs, by: { $0.key.accountID }) {
             guard let api = accountPRs.first?.api else { continue }
             let refs = accountPRs.map { PRRef(repo: $0.issue.repositorySlug, number: $0.issue.number) }
+            // Issue-time write-clock tick per PR — assigned *before* the batch fetch (each bundle
+            // carries a full gate), so a batch that observed an older gate loses to a merge-poll
+            // write issued after it, matching the REST drain's per-fetch stamping (#84). Ticked on
+            // the actor here since the fetch below is the only suspension point.
+            let issueSeq = accountPRs.reduce(into: [PRCheckKey: Int]()) { $0[$1.key] = nextGateWriteSeq() }
             guard let bundles = try? await api.pullRequestBatch(refs) else {
                 // Whole-account failure → REST fallback for all of its PRs.
                 fallback.append(contentsOf: accountPRs)
@@ -275,7 +280,8 @@ extension AppStore {
                         = mergeInfo
                 }
                 let state = Self.state(from: bundle, login: pr.login, repo: pr.issue.repositorySlug)
-                fold(key: pr.key, state: state, issueByKey: issueByKey, into: &pending)
+                let freshSeq = state.gate != nil ? issueSeq[pr.key] : nil
+                fold(key: pr.key, state: state, issueByKey: issueByKey, gateIssueSeq: freshSeq, into: &pending)
                 didFold = true
             }
         }
