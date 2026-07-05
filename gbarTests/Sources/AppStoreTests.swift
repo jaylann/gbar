@@ -446,6 +446,146 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.prChecks[key(300)])
     }
 
+    /// #84, checks-only variant: an unchanged PR's wave re-reads only its check-runs and carries the
+    /// cached "blocked" gate. If the merge-readiness poll writes the unblocked gate mid-flight, the
+    /// wave's batch republish must not clobber it back to "blocked" and re-hide Merge. A carried gate
+    /// never competes, so the poll's write survives.
+    func testMergePollGateWriteSurvivesChecksOnlyRepublish() async throws {
+        // Stable PR (unchanged `updated_at`) so the second wave takes the checks-only path.
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "blocked")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked → checks-only next wave
+
+        // Second wave blocks inside `checkRuns`, parked before republishing.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "blocked"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // While parked, the poll observes the recompute and writes the unblocked gate.
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let refreshed = await store.refreshPRState(for: pr, using: cleanFake)
+        XCTAssertEqual(refreshed?.mergeable, true) // poll saw the unblock
+
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
+    }
+
+    /// #84, the primary full-fetch trigger: after an approval bumps `updated_at`, the wave does a
+    /// *full* re-fetch. It issues its detail early and reads the still-stale "blocked" (GitHub hasn't
+    /// recomputed), then folds it late — after its slow checks/reviews legs. The poll issues *later*,
+    /// reads the recomputed "clean", and writes it. Because the wave's fetch read older state (issued
+    /// first) it must NOT clobber the poll at publish, even though it commits last. A commit-time
+    /// clock would fail this (the wave folds last); issue-time recency preserves the poll's gate.
+    func testLaterIssuedMergePollGateBeatsEarlierIssuedWaveFullFetch() async throws {
+        let seeded = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        // The approval bumps `updated_at`, so the second wave can't reuse the mark → full re-fetch.
+        let approved = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_500))
+
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [seeded]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "blocked")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked
+
+        // Second wave full-fetches the still-"blocked" detail (issued early) and blocks in checkRuns
+        // before folding.
+        let gated = GatedGitHubAPI(
+            search: [approved],
+            pullRequest: .stub(number: 7, mergeableState: "blocked"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // Poll issues *after* the wave's detail (later ⇒ read newer state) and writes "clean".
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let refreshed = await store.refreshPRState(for: pr, using: cleanFake)
+        XCTAssertEqual(refreshed?.mergeable, true)
+
+        // Wave folds its stale "blocked" last — but it read older state, so the poll's gate must win.
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
+    }
+
+    /// The symmetric case: a wave fetch that read *newer* state must win over an earlier poll write.
+    /// The poll confirmed "clean" first; then the base advanced and the wave (issued later) reads
+    /// "behind". The recency merge must publish the wave's not-mergeable gate rather than resurrect
+    /// the poll's stale "clean" and show a Merge button that would 405. (A "poll always wins" overlay
+    /// regresses here.)
+    func testLaterIssuedWaveFetchBeatsEarlierMergePollGate() async throws {
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        // Seed a *mergeable* gate so the second wave can't skip to checks-only → fresh full re-fetch.
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, true)
+
+        // Poll writes "clean" *before* the second wave issues its fetch (earlier observation).
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = []
+        _ = await store.refreshPRState(for: pr, using: cleanFake)
+
+        // Second wave issues later and reads "behind" (base advanced); its fresher fetch must win.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "behind"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        await gated.release()
+        await wave?.value
+
+        XCTAssertFalse(try XCTUnwrap(store.gate(for: pr)).mergeable) // fresher "behind" wins → Merge hidden
+    }
+
     // MARK: - Action gate derivation
 
     func testDeriveGateMergeableStates() {

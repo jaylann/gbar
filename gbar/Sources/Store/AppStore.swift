@@ -43,6 +43,19 @@ final class AppStore {
     /// hydrated → the row stays optimistic (buttons show). Written only by the hydration wave
     /// and the reset sites here; views read only.
     var prGates: [PRCheckKey: PRGate] = [:]
+    /// Monotonic clock for `prGates` writes. Both writers — the hydration wave's fresh full-fetch
+    /// (`publishChecks`) and the merge-readiness poll's single-key write (`refreshPRState`) — take
+    /// a tick when they *issue* their detail fetch, so a batch republish can resolve each key by
+    /// which fetch read the newer server state instead of clobbering a fresher gate with a staler
+    /// one (#84). Issue-time, not commit-time: the wave's full fetch folds only after its slow
+    /// checks/reviews legs, so a fetch that observed an older gate can commit *after* a fresher
+    /// poll write — issue order is the honest recency signal. Bookkeeping, never read from a view.
+    @ObservationIgnored
+    var gateWriteClock = 0
+    /// The `gateWriteClock` issue tick of the fetch whose result currently sits in `prGates[key]`
+    /// (see `gateWriteClock`). Pruned alongside `prGates`.
+    @ObservationIgnored
+    var prGateSeq: [PRCheckKey: Int] = [:]
     /// What each PR looked like at its last successful hydration — the `updated_at` we hydrated
     /// against and whether its CI had settled. Lets the next wave skip the detail/reviews/check-runs
     /// refetch for a PR that hasn't changed (see `canSkipHydration`). Never read from a view, so
@@ -713,6 +726,7 @@ extension AppStore {
         notifications.removeAll { $0.account.id == id }
         prChecks = prChecks.filter { $0.key.accountID != id }
         prGates = prGates.filter { $0.key.accountID != id }
+        prGateSeq = prGateSeq.filter { $0.key.accountID != id }
         repoMergeInfo = repoMergeInfo.filter { !$0.key.hasPrefix("\(id)\n") }
         starredByAccount[id] = nil
         actionRuns.removeAll { $0.account.id == id }
@@ -762,6 +776,7 @@ extension AppStore {
         notifications = []
         prChecks = [:]
         prGates = [:]
+        prGateSeq = [:]
         prHydrationMark = [:]
         repoMergeInfo = [:]
         starredByAccount = [:]
