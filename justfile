@@ -114,15 +114,21 @@ build: _ensure
         sleep 1
     done
     trap 'rm -rf "$lock" 2>/dev/null || true' EXIT
+    # Tee the full log (Swift diagnostics land well above the trailing summary, so a bare
+    # `tail` often hides the actual error) and only tail the console for a readable tail.
+    log="{{derived}}/build.log"
     xcodebuild \
         -workspace {{project}}.xcworkspace \
         -scheme {{scheme}} \
         -destination "platform=macOS" \
         -derivedDataPath "{{derived}}" \
         -configuration Debug \
-        build | tail -30
+        build | tee "$log" | tail -30
+    status=${PIPESTATUS[0]}
+    # On failure surface every error/warning line from the full log, not just the last 30 lines.
+    if [[ $status -ne 0 ]]; then grep -E "error:|warning:" "$log" || true; fi
     # Return xcodebuild's real exit code, not tail's.
-    exit ${PIPESTATUS[0]}
+    exit $status
 
 # Build and launch the app
 run: _ensure

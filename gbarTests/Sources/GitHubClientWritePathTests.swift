@@ -125,7 +125,7 @@ final class GitHubClientWritePathTests: XCTestCase {
         }
     }
 
-    func testRateLimitedSearchMapsToHTTPError() async throws {
+    func testRateLimitedSearchMapsToRateLimited() async throws {
         MockURLProtocol.handler = { request in
             let url = try XCTUnwrap(request.url)
             let response = try XCTUnwrap(HTTPURLResponse(
@@ -142,7 +142,9 @@ final class GitHubClientWritePathTests: XCTestCase {
             _ = try await client.searchIssues("is:open is:pr")
             XCTFail("Expected searchIssues to throw")
         } catch let error as GitHubClient.ClientError {
-            XCTAssertEqual(error, .http(403))
+            // A rate-limit 403 is now distinguished from a plain permission 403 so the store can
+            // back off; no reset header here, so `until` is nil.
+            XCTAssertEqual(error, .rateLimited(until: nil))
         }
     }
 

@@ -61,6 +61,8 @@ struct AccountsPane: View {
             // is visible instead of leaving a mysteriously disabled sign-in button.
             if effectiveClientID.isEmpty { showsAdvanced = true }
         }
+        // Don't retain a pasted token in memory after the window closes without a successful add.
+        .onDisappear { patToken = "" }
     }
 
     // MARK: Connected accounts
@@ -145,7 +147,7 @@ struct AccountsPane: View {
             Text("Sign in with GitHub")
         }
         .buttonStyle(GBButtonStyle(variant: .primary, isLoading: status.isWorking && lastAttempt == .deviceFlow))
-        .disabled(effectiveClientID.isEmpty || status.isWorking)
+        .disabled(effectiveClientID.isEmpty || status.isWorking || hostFieldError != nil)
         Text("Opens github.com in your browser to authorize gbar.")
             .font(Theme.Typography.caption)
             .foregroundStyle(.secondary)
@@ -162,7 +164,7 @@ struct AccountsPane: View {
             Text("Add token")
         }
         .buttonStyle(GBButtonStyle(variant: .primary, isLoading: status.isWorking && lastAttempt == .pat))
-        .disabled(patToken.isEmpty || status.isWorking)
+        .disabled(patToken.isEmpty || status.isWorking || hostFieldError != nil)
     }
 
     /// The device-flow user code as its own card: large, spaced monospace with a copy button,
@@ -221,9 +223,13 @@ struct AccountsPane: View {
                 VStack(alignment: .leading, spacing: Theme.Spacing.xs) {
                     TextField("API base URL", text: $addHost, prompt: Text(store.apiBaseURL.absoluteString))
                         .modifier(SettingsFieldStyle())
-                    Text("Leave blank for github.com. For GitHub Enterprise, e.g. https://ghe.example.com/api/v3")
-                        .font(Theme.Typography.caption)
-                        .foregroundStyle(.secondary)
+                    if let hostFieldError {
+                        ValidationHint(message: hostFieldError)
+                    } else {
+                        Text("Leave blank for github.com. For GitHub Enterprise, e.g. https://ghe.example.com/api/v3")
+                            .font(Theme.Typography.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
         }
@@ -278,17 +284,16 @@ struct AccountsPane: View {
     private func methodBinding(_ value: Method) -> Binding<Bool> {
         Binding(
             get: { method == value },
-            set: { isOn in if isOn { method = value } }
+            set: { isOn in
+                guard isOn else { return }
+                // Don't leave a typed token sitting in view memory after switching to device flow.
+                if value != .pat { patToken = "" }
+                method = value
+            }
         )
     }
 
     // MARK: Auth
-
-    /// Short, human-readable host for an account's API base URL.
-    private func hostLabel(_ url: URL) -> String {
-        guard let host = url.host else { return url.absoluteString }
-        return host == "api.github.com" ? "github.com" : host
-    }
 
     /// The client ID used when the user hasn't typed an override: baked into the build if
     /// present, else the last one persisted on the store (self-host remembers it).
@@ -302,12 +307,15 @@ struct AccountsPane: View {
         return typed.isEmpty ? defaultClientID : typed
     }
 
-    /// The host a newly-added account should use: the override field if filled, else the
-    /// app default. Falls back to the default on an unparsable override.
+    /// The host a newly-added account should use: the override field if filled and valid, else the
+    /// app default. `hostFieldError` gates submission, so an invalid override never reaches here.
     private var resolvedAddURL: URL {
-        let trimmed = addHost.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return store.apiBaseURL }
-        return url
+        HostField.url(addHost) ?? store.apiBaseURL
+    }
+
+    /// An inline error when the Advanced host field isn't a usable https base URL (see `HostField`).
+    private var hostFieldError: String? {
+        HostField.error(addHost)
     }
 
     private func resetInputs() {
@@ -319,12 +327,6 @@ struct AccountsPane: View {
     private func startDeviceFlow() async {
         status = .working("Requesting a device code…")
         deviceCode = nil
-        // Persist the (public) client ID on the store so a later 401 can reconnect this account
-        // in place without the user re-entering it. Only a typed override is written — the baked
-        // default shouldn't overwrite a previously stored self-host value.
-        if !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            store.oauthClientID = effectiveClientID
-        }
         do {
             try await store.addAccountViaDeviceFlow(
                 clientID: effectiveClientID,
@@ -335,6 +337,12 @@ struct AccountsPane: View {
                     status = .working("Waiting for you to authorize in the browser…")
                 }
             )
+            // Persist the (public) client ID only on success, so a typo'd override that failed to
+            // sign in doesn't get baked into the store and fed to a future 401 reconnect. Only a
+            // typed override is written — the baked default shouldn't overwrite a stored self-host value.
+            if !clientID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                store.oauthClientID = effectiveClientID
+            }
             status = .success("Connected \(store.accounts.last.map { "@\($0.login)" } ?? "").")
             resetInputs()
         } catch {
@@ -367,6 +375,37 @@ struct AccountsPane: View {
         case .pat: Task { await addToken() }
         case .none: break
         }
+    }
+}
+
+/// Short, human-readable host for an account's API base URL.
+private func hostLabel(_ url: URL) -> String {
+    guard let host = url.host else { return url.absoluteString }
+    return host == "api.github.com" ? "github.com" : host
+}
+
+/// Validation for the optional Enterprise host override. `URL(string:)` is lenient enough that a
+/// scheme-less `ghe.corp.com` parses as a relative path (no host), which would make every request
+/// malformed and surface only as a vague later failure; and `http://` would leak the bearer token
+/// in cleartext. A blank field is valid (use the default host). `internal` (not `private`) so it's
+/// unit-testable — this is the same cleartext-guard as `WebLink`.
+enum HostField {
+    /// The validated override URL, or nil when blank/invalid.
+    static func url(_ raw: String) -> URL? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https", url.host != nil
+        else { return nil }
+        return url
+    }
+
+    /// An inline error message when the field is non-blank but not a usable https base URL.
+    static func error(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        return url(trimmed) == nil
+            ? "Enter a full https URL including the host, e.g. https://ghe.example.com/api/v3"
+            : nil
     }
 }
 

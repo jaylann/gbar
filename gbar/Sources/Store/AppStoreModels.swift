@@ -96,6 +96,10 @@ struct PRGate {
 struct PRState {
     let checks: PRChecks?
     let gate: PRGate?
+    /// The PR's head (sha + ref) as of this hydration, so a subsequent unchanged poll can re-fetch
+    /// just its check-runs against the same sha without re-fetching the detail. `nil` when the
+    /// detail fetch failed (no head to record).
+    let head: PullRequestDetail.Head?
 }
 
 /// The result of loading one account's sections + inbox, gathered off the main actor and
@@ -119,6 +123,10 @@ struct AccountLoad {
     var starredSucceeded: Bool
     var sessionExpired: Bool
     var errorMessage: String?
+    /// When any request for this account hit a GitHub rate limit (from `Retry-After` /
+    /// `X-RateLimit-Reset`), the time access is expected back — the poll loop backs off to the
+    /// latest such time across accounts. nil when nothing was rate-limited this poll.
+    var rateLimitedUntil: Date?
 }
 
 /// State of an in-place re-authentication (device flow) kicked off from the 401 prompt for a

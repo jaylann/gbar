@@ -100,6 +100,15 @@ struct MenuContentView: View {
         // `refresh()` is single-flight, so opening the menu while the background poll loop is
         // mid-fetch coalesces onto that run instead of overlapping it (see AppStore.refresh, #10).
         .task { if store.isSignedIn { await store.refresh() } }
+        // The search field unmounts when the list transiently empties (e.g. after mark-all-read or
+        // before feeds finish loading). Reset the query so it doesn't reappear pre-populated and
+        // silently filtering once data returns.
+        .onChange(of: showsFilters) { _, shows in
+            if !shows {
+                searchActive = false
+                searchText = ""
+            }
+        }
     }
 
     // MARK: Top bar
@@ -536,7 +545,7 @@ extension MenuContentView {
 
     private func issueRow(_ item: AccountItem) -> some View {
         Button {
-            if let url = URL(string: item.issue.htmlURL) { openURL(url) }
+            if let url = WebLink.parse(item.issue.htmlURL) { openURL(url) }
         } label: {
             HoverRow { IssueRow(issue: item.issue, isStarred: store.isStarred(item)) }
         }
@@ -566,7 +575,9 @@ extension MenuContentView {
                 }
             }, content: {
                 Button {
-                    if let url = notification.htmlURL(apiBaseURL: item.account.apiBaseURL) { openURL(url) }
+                    if let url = WebLink.sanitize(notification.htmlURL(apiBaseURL: item.account.apiBaseURL)) {
+                        openURL(url)
+                    }
                 } label: {
                     NotificationRow(model: NotificationRow.Model(notification, isStarred: store.isStarred(item)))
                 }

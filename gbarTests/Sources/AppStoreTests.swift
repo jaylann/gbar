@@ -381,6 +381,146 @@ final class AppStoreTests: XCTestCase {
         XCTAssertNil(store.prChecks[key(300)])
     }
 
+    /// #84, checks-only variant: an unchanged PR's wave re-reads only its check-runs and carries the
+    /// cached "blocked" gate. If the merge-readiness poll writes the unblocked gate mid-flight, the
+    /// wave's batch republish must not clobber it back to "blocked" and re-hide Merge. A carried gate
+    /// never competes, so the poll's write survives.
+    func testMergePollGateWriteSurvivesChecksOnlyRepublish() async throws {
+        // Stable PR (unchanged `updated_at`) so the second wave takes the checks-only path.
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "blocked")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked → checks-only next wave
+
+        // Second wave blocks inside `checkRuns`, parked before republishing.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "blocked"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // While parked, the poll observes the recompute and writes the unblocked gate.
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let refreshed = await store.refreshPRState(for: pr, using: cleanFake)
+        XCTAssertEqual(refreshed?.mergeable, true) // poll saw the unblock
+
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
+    }
+
+    /// #84, the primary full-fetch trigger: after an approval bumps `updated_at`, the wave does a
+    /// *full* re-fetch. It issues its detail early and reads the still-stale "blocked" (GitHub hasn't
+    /// recomputed), then folds it late — after its slow checks/reviews legs. The poll issues *later*,
+    /// reads the recomputed "clean", and writes it. Because the wave's fetch read older state (issued
+    /// first) it must NOT clobber the poll at publish, even though it commits last. A commit-time
+    /// clock would fail this (the wave folds last); issue-time recency preserves the poll's gate.
+    func testLaterIssuedMergePollGateBeatsEarlierIssuedWaveFullFetch() async throws {
+        let seeded = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        // The approval bumps `updated_at`, so the second wave can't reuse the mark → full re-fetch.
+        let approved = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_500))
+
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [seeded]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "blocked")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, false) // seeded blocked
+
+        // Second wave full-fetches the still-"blocked" detail (issued early) and blocks in checkRuns
+        // before folding.
+        let gated = GatedGitHubAPI(
+            search: [approved],
+            pullRequest: .stub(number: 7, mergeableState: "blocked"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        // Poll issues *after* the wave's detail (later ⇒ read newer state) and writes "clean".
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = [.stub(login: "octocat", state: "APPROVED")]
+        let refreshed = await store.refreshPRState(for: pr, using: cleanFake)
+        XCTAssertEqual(refreshed?.mergeable, true)
+
+        // Wave folds its stale "blocked" last — but it read older state, so the poll's gate must win.
+        await gated.release()
+        await wave?.value
+
+        XCTAssertTrue(try XCTUnwrap(store.gate(for: pr)).mergeable) // Merge stays shown
+    }
+
+    /// The symmetric case: a wave fetch that read *newer* state must win over an earlier poll write.
+    /// The poll confirmed "clean" first; then the base advanced and the wave (issued later) reads
+    /// "behind". The recency merge must publish the wave's not-mergeable gate rather than resurrect
+    /// the poll's stale "clean" and show a Merge button that would 405. (A "poll always wins" overlay
+    /// regresses here.)
+    func testLaterIssuedWaveFetchBeatsEarlierMergePollGate() async throws {
+        let prIssue = SearchIssue.stub(id: 100, number: 7, updatedAt: Date(timeIntervalSince1970: 1_700_000_000))
+
+        // Seed a *mergeable* gate so the second wave can't skip to checks-only → fresh full re-fetch.
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [prIssue]
+        seed.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        seed.repositoryResult = .stub(push: true)
+        seed.reviewsResult = []
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        try await waitUntil { store.gate(for: pr) != nil }
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, true)
+
+        // Poll writes "clean" *before* the second wave issues its fetch (earlier observation).
+        var cleanFake = FakeGitHubAPI()
+        cleanFake.pullRequestResult = .stub(number: 7, mergeableState: "clean")
+        cleanFake.repositoryResult = .stub(push: true)
+        cleanFake.reviewsResult = []
+        _ = await store.refreshPRState(for: pr, using: cleanFake)
+
+        // Second wave issues later and reads "behind" (base advanced); its fresher fetch must win.
+        let gated = GatedGitHubAPI(
+            search: [prIssue],
+            pullRequest: .stub(number: 7, mergeableState: "behind"),
+            checkRuns: [.stub(id: 1, conclusion: "success")]
+        )
+        store.makeAPI = { _, _ in gated }
+        await store.refresh()
+        await gated.waitUntilBlocked()
+        let wave = store.checksHydrationTaskForTests
+
+        await gated.release()
+        await wave?.value
+
+        XCTAssertFalse(try XCTUnwrap(store.gate(for: pr)).mergeable) // fresher "behind" wins → Merge hidden
+    }
+
     // MARK: - Action gate derivation
 
     func testDeriveGateMergeableStates() {
@@ -512,6 +652,22 @@ final class AppStoreTests: XCTestCase {
         let gate = try XCTUnwrap(store.prGates[key(102, account: "jaylann")])
         XCTAssertFalse(gate.alreadyApproved) // reviews skipped for the viewer's own PR
         XCTAssertTrue(gate.mergeable) // you can still merge your own PR
+    }
+
+    /// A maintainer (or admin) without the `push` bit can still merge — the gate signal is
+    /// `push || maintain || admin`, so a maintainer-only repo must not hide Merge.
+    func testRefreshGateMaintainerWithoutPushCanMerge() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 103, number: 11)]
+        fake.pullRequestResult = .stub(number: 11, mergeableState: "clean")
+        fake.repositoryResult = .stub(push: false, maintain: true) // maintainer, no push
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        try await waitUntil { store.prGates[self.key(103)] != nil }
+
+        let gate = try XCTUnwrap(store.prGates[key(103)])
+        XCTAssertTrue(gate.mergeable)
     }
 
     /// Polls `condition` on the main actor until true or the timeout elapses.
@@ -910,6 +1066,232 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(store.accounts.map(\.login), ["legacyuser"])
     }
 
+    /// A revoked legacy token (401 on `currentUser`) must be dropped so `isSignedIn` falls to false
+    /// and the sign-in prompt takes over — not retried every poll behind a permanent skeleton.
+    func testLegacyMigration401DropsTokenAndSurfacesSignIn() async throws {
+        let url = try makeURL()
+        let fake = FakeGitHubAPI(error: GitHubClient.ClientError.http(401))
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let box = TokenBox()
+        store.storeToken = { token, key in box.set(token, key) }
+        store.deleteToken = { box.remove($0) }
+        store.tokenForAccount = { box.get($0.keychainKey) }
+        box.set("dead-token", Credential.keychainKey)
+        store.pendingLegacyTokenForTests = "dead-token"
+        XCTAssertTrue(store.isSignedIn)
+
+        await store.refresh()
+
+        XCTAssertFalse(store.isSignedIn)
+        XCTAssertNil(store.pendingLegacyTokenForTests)
+        XCTAssertNil(box.get(Credential.keychainKey))
+        XCTAssertTrue(store.hasLoaded) // no permanent first-load skeleton
+        XCTAssertNotNil(store.lastErrorMessage)
+    }
+
+    /// A transient (non-401) migration failure keeps the token staged for the next poll's retry.
+    func testLegacyMigrationTransientFailureKeepsToken() async throws {
+        struct Boom: Error {}
+        let url = try makeURL()
+        let fake = FakeGitHubAPI(error: Boom())
+        let store = AppStore(apiBaseURL: url, accounts: [], makeAPI: { _, _ in fake })
+        let box = TokenBox()
+        store.storeToken = { token, key in box.set(token, key) }
+        store.deleteToken = { box.remove($0) }
+        store.tokenForAccount = { box.get($0.keychainKey) }
+        box.set("legacy-token", Credential.keychainKey)
+        store.pendingLegacyTokenForTests = "legacy-token"
+
+        await store.refresh()
+
+        XCTAssertEqual(store.pendingLegacyTokenForTests, "legacy-token")
+        XCTAssertTrue(store.isSignedIn)
+    }
+
+    // MARK: - Rate limiting
+
+    /// A rate-limited load records the reset time and surfaces the backoff message rather than a
+    /// generic failure, and doesn't flag the session expired.
+    func testRateLimitedLoadBacksOffAndSurfacesMessage() async throws {
+        let reset = Date().addingTimeInterval(300)
+        let fake = FakeGitHubAPI(error: GitHubClient.ClientError.rateLimited(until: reset))
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+
+        let until = try XCTUnwrap(store.rateLimitedUntil)
+        XCTAssertEqual(until.timeIntervalSince1970, reset.timeIntervalSince1970, accuracy: 1)
+        XCTAssertEqual(store.lastErrorMessage, AuthErrorCopy.rateLimitMessage(until: reset))
+        XCTAssertFalse(store.sessionExpired)
+    }
+
+    /// When only the inbox is rate-limited, the sections that loaded still show — the limit only
+    /// drives the backoff and message.
+    func testPartialRateLimitKeepsLoadedSections() async throws {
+        let reset = Date().addingTimeInterval(120)
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = SearchIssue.stubs(count: 2)
+        fake.notificationsError = GitHubClient.ClientError.rateLimited(until: reset)
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        XCTAssertTrue(store.sections.contains { !$0.items.isEmpty })
+        XCTAssertNotNil(store.rateLimitedUntil)
+        XCTAssertFalse(store.sessionExpired)
+        // The request-heavy CI/repo-feed hydration (N+1 over the PR list) is skipped while limited.
+        XCTAssertEqual(fake.recorder.pullRequestCount, 0)
+    }
+
+    /// A PR unchanged since the last poll (same `updated_at`) skips the detail+reviews refetch —
+    /// its gate is still current — but its check-runs are still re-read, because CI can flip on a
+    /// re-run of the same commit without bumping `updated_at`. This is the idle-inbox N+1 cut.
+    func testUnchangedPRSkipsDetailButStillPollsChecks() async throws {
+        let ts = Date()
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        // Not-yet-mergeable (blocked) so it's skip-eligible — a mergeable PR is deliberately never
+        // skipped (see `testMergeablePRIsNotSkipped`).
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
+        fake.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        let detailAfterSeed = fake.recorder.pullRequestCount
+        let checksAfterSeed = fake.recorder.checkRunsCount
+        XCTAssertEqual(detailAfterSeed, 1, "seed poll fetches the detail once")
+
+        // Second poll, identical `updated_at`.
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertEqual(fake.recorder.pullRequestCount, detailAfterSeed, "unchanged PR must not refetch detail/reviews")
+        XCTAssertGreaterThan(
+            fake.recorder.checkRunsCount,
+            checksAfterSeed,
+            "check-runs must still be polled on the skip"
+        )
+    }
+
+    /// When a PR's `updated_at` advances, the skip does not apply — the detail is refetched so the
+    /// gate (mergeable/approved) re-derives against the new state.
+    func testAdvancedUpdatedAtRefetchesDetail() async throws {
+        let old = Date(timeIntervalSince1970: 1_700_000_000)
+        var seed = FakeGitHubAPI()
+        seed.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old)]
+        seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
+        seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        let store = try makeStore(api: seed)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertEqual(seed.recorder.pullRequestCount, 1)
+
+        var next = FakeGitHubAPI()
+        next.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: old.addingTimeInterval(3600))]
+        next.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
+        next.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
+        store.makeAPI = { [next] _, _ in next }
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        // A fresh fake → its own recorder; a full refetch means the detail was fetched on it.
+        XCTAssertEqual(next.recorder.pullRequestCount, 1, "an advanced updated_at must trigger a full refetch")
+    }
+
+    /// A PR whose Merge button is showing (`gate.mergeable`) is never skipped, even when unchanged:
+    /// a base-branch advance can flip its `mergeable_state` to behind/dirty without bumping
+    /// `updated_at`, and a stale Merge button would 405 on click. So it's always refetched.
+    func testMergeablePRIsNotSkipped() async throws {
+        let ts = Date()
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7, updatedAt: ts)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "clean")
+        fake.repositoryResult = .stub(push: true)
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        let detailAfterSeed = fake.recorder.pullRequestCount
+        let pr = try XCTUnwrap(store.prSections.flatMap(\.items).first { $0.issue.number == 7 })
+        XCTAssertEqual(store.gate(for: pr)?.mergeable, true, "precondition: the PR is mergeable")
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+        XCTAssertGreaterThan(
+            fake.recorder.pullRequestCount, detailAfterSeed, "a mergeable PR must be refetched, not skipped"
+        )
+    }
+
+    func testPollDelayHonorsRateLimitAndCadenceFloor() {
+        let now = Date()
+        // A future reset past the cadence wins.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(300), now: now),
+            300, accuracy: 0.01
+        )
+        // A reset sooner than the cadence floors at the cadence.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(10), now: now),
+            60, accuracy: 0.01
+        )
+        // A past reset and a nil reset both degrade to the plain cadence.
+        XCTAssertEqual(
+            AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: now.addingTimeInterval(-100), now: now),
+            60, accuracy: 0.01
+        )
+        XCTAssertEqual(AppStore.pollDelay(pollInterval: 60, rateLimitedUntil: nil, now: now), 60, accuracy: 0.01)
+    }
+
+    /// A clean poll after a rate limit clears the backoff and its message.
+    func testRecoveredPollClearsRateLimit() async throws {
+        let reset = Date().addingTimeInterval(120)
+        let limited = FakeGitHubAPI(error: GitHubClient.ClientError.rateLimited(until: reset))
+        let store = try makeStore(api: limited)
+        await store.refresh()
+        XCTAssertNotNil(store.rateLimitedUntil)
+
+        store.makeAPI = { _, _ in FakeGitHubAPI() }
+        await store.refresh(force: true)
+
+        XCTAssertNil(store.rateLimitedUntil)
+        XCTAssertNil(store.lastErrorMessage)
+    }
+
+    // MARK: - Notification mutator auth
+
+    /// A 401 marking one thread read flags the session expired (matching the quick-action path),
+    /// keeps the item, and offers a reconnect instead of a dead-end failure.
+    func testMarkReadUnauthorizedFlagsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1")]
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        store.makeAPI = { _, _ in FakeGitHubAPI(error: GitHubClient.ClientError.http(401)) }
+        let target = try XCTUnwrap(store.notifications.first)
+        await store.markRead(target)
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.expiredAccount?.login, "octocat")
+        XCTAssertEqual(store.notifications.map(\.notification.id), ["1"])
+    }
+
+    /// A 401 from the bulk mark-all endpoint likewise flags the session expired and keeps the inbox.
+    func testMarkAllReadUnauthorizedFlagsSessionExpired() async throws {
+        var fake = FakeGitHubAPI()
+        fake.notificationsResult = [.stub(id: "1"), .stub(id: "2")]
+        fake.actionError = GitHubClient.ClientError.http(401)
+        let store = try makeStore(api: fake)
+        await store.refresh()
+
+        await store.markAllRead()
+
+        XCTAssertTrue(store.sessionExpired)
+        XCTAssertEqual(store.notifications.count, 2)
+    }
+
     // MARK: - Starred signal
 
     func testRefreshMergesStarredAndIsStarredIsCaseInsensitive() async throws {
@@ -980,6 +1362,13 @@ final class AppStoreTests: XCTestCase {
         // Interior whitespace is a typo, not a repo path.
         XCTAssertNil(AppStore.normalizedSlug("own er/repo"))
         XCTAssertNil(AppStore.normalizedSlug("owner/ "))
+        // Path-traversal segments are rejected so a slug can't rewrite the request path (these are
+        // valid 2-component slugs that only the new `.`/`..` guard rejects).
+        XCTAssertNil(AppStore.normalizedSlug("../foo"))
+        XCTAssertNil(AppStore.normalizedSlug("owner/.."))
+        XCTAssertNil(AppStore.normalizedSlug("../repo"))
+        // A repo name containing dots (but not a bare `..`) is still valid.
+        XCTAssertEqual(AppStore.normalizedSlug("owner/repo.js"), "owner/repo.js")
     }
 
     // MARK: - Repo feeds hydration

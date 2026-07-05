@@ -74,6 +74,8 @@ struct InlineTabBar<Tag: Hashable>: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        // Mark the active tab for VoiceOver — selection is otherwise only colour + underline.
+        .accessibilityAddTraits(selected ? .isSelected : [])
     }
 
     /// The tab's title + optional count at a given weight. Used twice per tab: a hidden

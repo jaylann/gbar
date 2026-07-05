@@ -34,6 +34,9 @@ struct FilterChip: View {
         .onHover { isHovering = $0 }
         .animation(Motion.respecting(reduceMotion, Motion.hover), value: isOn)
         .animation(Motion.respecting(reduceMotion, Motion.hover), value: isHovering)
+        // Convey on/off to VoiceOver — the state is otherwise only tint/weight, invisible to it.
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityValue(isOn ? Text("On") : Text("Off"))
     }
 
     private var background: Color {

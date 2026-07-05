@@ -22,6 +22,7 @@ extension AppStore {
     func markAllRead() async {
         let scoped = accountFilter == nil ? accounts : accounts.filter { $0.id == accountFilter }
         var failed = false
+        var expired = false
         for account in scoped {
             guard notifications.contains(where: { $0.account.id == account.id && $0.notification.unread }),
                   let token = tokenForAccount(account) else { continue }
@@ -30,11 +31,22 @@ extension AppStore {
                 try await api.markAllNotificationsRead()
                 dropNotifications(forAccount: account.id)
             } catch {
-                failed = true
+                // A 401 means this account's token is dead — flag it for reconnect, matching the
+                // per-thread mark-read and quick-action paths, instead of a generic failure.
+                if case .http(401) = error as? GitHubClient.ClientError {
+                    markSessionExpired(accountID: account.id)
+                    expired = true
+                } else {
+                    failed = true
+                }
                 Log.network.error("mark all read failed: \(error.localizedDescription, privacy: .public)")
             }
         }
-        lastErrorMessage = failed ? "Couldn't mark all notifications as read." : nil
+        if expired {
+            lastErrorMessage = "Session expired — reconnect in Settings."
+        } else {
+            lastErrorMessage = failed ? "Couldn't mark all notifications as read." : nil
+        }
     }
 
     // MARK: - Sections

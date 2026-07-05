@@ -111,7 +111,7 @@ struct PRRowItem: View {
                 )
             }, content: {
                 Button {
-                    if let url = URL(string: issue.htmlURL) { openURL(url) }
+                    if let url = WebLink.parse(issue.htmlURL) { openURL(url) }
                 } label: {
                     PRRow(issue: issue, ci: checks?.status, isStarred: store.isStarred(item))
                 }
@@ -366,7 +366,7 @@ struct ActionRunRowItem: View {
                     .gbTooltip(item.account.login)
             }
             Button {
-                if let url = URL(string: item.run.htmlURL) { openURL(url) }
+                if let url = WebLink.parse(item.run.htmlURL) { openURL(url) }
             } label: {
                 HoverRow { ActionRunRow(model: ActionRunRow.Model(item, isStarred: isStarred)) }
             }
@@ -389,7 +389,7 @@ struct ReleaseRowItem: View {
                     .gbTooltip(item.account.login)
             }
             Button {
-                if let url = URL(string: item.release.htmlURL) { openURL(url) }
+                if let url = WebLink.parse(item.release.htmlURL) { openURL(url) }
             } label: {
                 HoverRow { ReleaseRow(model: ReleaseRow.Model(item, isStarred: isStarred)) }
             }
