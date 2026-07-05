@@ -257,6 +257,11 @@ extension AppStore {
         // concurrent poll — the poll either issued before this drain (lower tick) or after (higher) —
         // which is the level the poll-vs-wave decision turns on. (Assigned here on the actor because
         // the group's `schedule()` runs nonisolated and can't tick the main-actor clock.)
+        // Note: because the whole wave shares one issue instant, a poll that issues mid-drain beats
+        // even a late-queued key whose own network fetch (capped concurrency) read newer state. That
+        // residual is narrow and self-heals: the next wave out-ticks the poll, and the poll keeps
+        // refetching while `!mergeable`. True per-key issue stamping would need a main-actor hop per
+        // fetch, which isn't worth it for a transient, self-correcting gate flip.
         var seqBuilder: [PRCheckKey: Int] = [:]
         for plan in plans {
             if case let .full(pr, _) = plan { seqBuilder[pr.key] = nextGateWriteSeq() }
