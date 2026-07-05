@@ -33,4 +33,26 @@ final class AppConfigWebHostTests: XCTestCase {
         let web = AppConfig.webBaseURL(forAPI: api)
         XCTAssertEqual(web.absoluteString, "https://github.com")
     }
+
+    // MARK: - GraphQL endpoint
+
+    func testPublicGitHubGraphQLEndpoint() throws {
+        let api = try XCTUnwrap(URL(string: "https://api.github.com"))
+        XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "https://api.github.com/graphql")
+    }
+
+    func testEnterpriseGraphQLEndpoint() throws {
+        let api = try XCTUnwrap(URL(string: "https://ghe.example.com/api/v3"))
+        XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "https://ghe.example.com/api/graphql")
+    }
+
+    func testEnterpriseGraphQLPreservesSchemeAndPort() throws {
+        let api = try XCTUnwrap(URL(string: "http://ghe.internal:3000/api/v3"))
+        XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "http://ghe.internal:3000/api/graphql")
+    }
+
+    func testUnparsableGraphQLFallsBackToPublicEndpoint() throws {
+        let api = try XCTUnwrap(URL(string: "file:///local/path"))
+        XCTAssertEqual(AppConfig.graphQLURL(forAPI: api).absoluteString, "https://api.github.com/graphql")
+    }
 }

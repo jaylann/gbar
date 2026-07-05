@@ -41,6 +41,25 @@ enum AppConfig {
         return URL(string: "\(scheme)://\(host)\(port)") ?? fallback
     }
 
+    /// Derives the GraphQL endpoint from a REST API base URL — a different host/path than REST.
+    ///
+    /// - `api.github.com` (REST) maps to `https://api.github.com/graphql`.
+    /// - Enterprise REST URLs (`https://ghe.example.com/api/v3`) map to
+    ///   `https://ghe.example.com/api/graphql` (same host, `/api/graphql` in place of `/api/v3`).
+    /// - Anything we can't parse falls back to the public `https://api.github.com/graphql`.
+    static func graphQLURL(forAPI apiBaseURL: URL) -> URL {
+        let fallback = URL(string: "https://api.github.com/graphql") ?? URL(fileURLWithPath: "/")
+        guard let components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false),
+              let host = components.host, !host.isEmpty
+        else { return fallback }
+
+        let scheme = components.scheme ?? "https"
+        if host == "api.github.com" { return fallback }
+        // Enterprise: keep scheme + host (+ port), point at the `/api/graphql` endpoint.
+        let port = components.port.map { ":\($0)" } ?? ""
+        return URL(string: "\(scheme)://\(host)\(port)/api/graphql") ?? fallback
+    }
+
     private static func value(for key: String) -> String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

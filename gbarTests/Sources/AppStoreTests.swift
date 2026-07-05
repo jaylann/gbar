@@ -325,6 +325,45 @@ final class AppStoreTests: XCTestCase {
         XCTAssertEqual(checks.checks.first?.branch, "feature/ci") // branch = head ref, not SHA
     }
 
+    /// The default hydration path issues one GraphQL `pullRequestBatch` per account and no per-PR
+    /// REST detail/checks calls — the whole point of issue #83.
+    func testRefreshHydratesViaGraphQLBatch() async throws {
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", headRef: "feature/ci", mergeableState: "clean")
+        fake.checkRunsResult = [.stub(id: 1, name: "CI / build", conclusion: "success")]
+        fake.repositoryResult = .stub(push: true)
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        XCTAssertEqual(fake.recorder.batchCount, 1, "one GraphQL round-trip for the account")
+        XCTAssertEqual(fake.recorder.pullRequestCount, 0, "no per-PR REST detail fetch on the batch path")
+        XCTAssertEqual(fake.recorder.checkRunsCount, 0, "no per-PR REST check-runs fetch on the batch path")
+        XCTAssertEqual(store.prChecks[key(100)]?.status, .success)
+        XCTAssertEqual(store.prGates[key(100)]?.mergeable, true) // clean + push access, from the bundle
+    }
+
+    /// When the GraphQL batch throws (a GHE server missing a field, a transport error), the store
+    /// falls back to the per-PR REST hydration and still lands the same state.
+    func testGraphQLBatchFailureFallsBackToREST() async throws {
+        struct Boom: Error {}
+        var fake = FakeGitHubAPI()
+        fake.defaultResult = [SearchIssue.stub(id: 100, number: 7)]
+        fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", headRef: "feature/ci")
+        fake.checkRunsResult = [.stub(id: 1, name: "CI / build", conclusion: "success")]
+        fake.batchError = Boom() // GraphQL unavailable
+        let store = try makeStore(api: fake)
+
+        await store.refresh()
+        await store.awaitChecksHydration()
+
+        XCTAssertGreaterThanOrEqual(fake.recorder.batchCount, 1, "the batch was attempted")
+        XCTAssertGreaterThan(fake.recorder.pullRequestCount, 0, "fell back to per-PR REST detail")
+        XCTAssertEqual(store.prChecks[key(100)]?.status, .success, "REST fallback still hydrates CI")
+    }
+
     func testRefreshWithNoCheckRunsLeavesPRUnhydrated() async throws {
         var fake = FakeGitHubAPI()
         fake.defaultResult = [SearchIssue.stub(id: 200, number: 8)]
@@ -1016,6 +1055,7 @@ final class AppStoreTests: XCTestCase {
         fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         fake.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         let store = try makeStore(api: fake)
+        store.useGraphQLBatch = false // the updated_at short-circuit is a REST-path optimization
 
         await store.refresh()
         await store.awaitChecksHydration()
@@ -1043,6 +1083,7 @@ final class AppStoreTests: XCTestCase {
         seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         let store = try makeStore(api: seed)
+        store.useGraphQLBatch = false // the updated_at short-circuit is a REST-path optimization
 
         await store.refresh()
         await store.awaitChecksHydration()
@@ -1070,6 +1111,7 @@ final class AppStoreTests: XCTestCase {
         fake.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "clean")
         fake.repositoryResult = .stub(push: true)
         let store = try makeStore(api: fake)
+        store.useGraphQLBatch = false // the updated_at short-circuit is a REST-path optimization
 
         await store.refresh()
         await store.awaitChecksHydration()

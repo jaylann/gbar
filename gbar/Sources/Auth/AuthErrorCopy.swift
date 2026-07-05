@@ -42,6 +42,9 @@ enum AuthErrorCopy {
         case let .http(code): httpMessage(code)
         case .badURL: "That API base URL looks invalid — check it under Advanced."
         case let .rateLimited(until): rateLimitMessage(until: until)
+        // The batch hydration catches `.graphQL` and falls back to REST, so it never reaches
+        // user-facing copy; map it to the generic message defensively.
+        case .graphQL: "Something went wrong talking to GitHub. Try again."
         }
     }
 

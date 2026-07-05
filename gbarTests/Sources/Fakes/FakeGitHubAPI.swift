@@ -26,6 +26,7 @@ final class CallRecorder: @unchecked Sendable {
     private var _pullRequestQueue: [PullRequestDetail] = []
     private var _pullRequestCount = 0
     private var _checkRunsCount = 0
+    private var _batchCount = 0
 
     /// Total `pullRequest` calls received — lets a test assert the post-approve poll retried.
     var pullRequestCount: Int {
@@ -40,6 +41,16 @@ final class CallRecorder: @unchecked Sendable {
 
     func recordCheckRuns() {
         lock.withLock { _checkRunsCount += 1 }
+    }
+
+    /// Total `pullRequestBatch` calls received — lets a test assert a refresh hydrated via one
+    /// GraphQL round-trip per account instead of the per-PR REST triple.
+    var batchCount: Int {
+        lock.withLock { _batchCount }
+    }
+
+    func recordBatch() {
+        lock.withLock { _batchCount += 1 }
     }
 
     /// Thread IDs passed to `markNotificationRead`, in call order.
@@ -133,6 +144,9 @@ struct FakeGitHubAPI: GitHubAPI {
     /// When set, `checkRuns` throws this — simulates a transient CI-fetch failure while the PR
     /// still loads into its section (so its CI baseline must be preserved, not wiped).
     var checkRunsError: Error?
+    /// When set, `pullRequestBatch` throws this — simulates the GraphQL path being unavailable
+    /// (a GHE server missing a field, a transport error) so the store's REST fallback is testable.
+    var batchError: Error?
     /// Returned by `currentUser()` — the account a token resolves to when validated/added.
     var currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
     /// Returned by `starredRepos()` — the `owner/name` slugs the account has starred.
@@ -179,6 +193,27 @@ struct FakeGitHubAPI: GitHubAPI {
     func reviews(repo _: String, number _: Int) async throws -> [PullRequestReview] {
         if let error { throw error }
         return reviewsResult
+    }
+
+    /// Composes a bundle per ref from the same stubs the REST path uses (`pullRequestResult` +
+    /// `reviewsResult` + `checkRunsResult` + `repositoryResult`), so a store test exercises the
+    /// GraphQL hydration path with the existing knobs. `batchError` (or a global `error`) makes it
+    /// throw, driving the store's REST fallback.
+    func pullRequestBatch(_ refs: [PRRef]) async throws -> [PRRef: PullRequestBundle] {
+        recorder.recordBatch()
+        if let batchError { throw batchError }
+        if let error { throw error }
+        let perms = repositoryResult.permissions
+        let canMerge = (perms?.push ?? false) || (perms?.maintain ?? false) || (perms?.admin ?? false)
+        let mergeInfo = RepoMergeInfo(canMerge: canMerge, allowedMethods: repositoryResult.allowedMergeMethods)
+        return refs.reduce(into: [:]) { result, ref in
+            result[ref] = PullRequestBundle(
+                detail: pullRequestResult,
+                reviews: reviewsResult,
+                checkRuns: checkRunsResult,
+                mergeInfo: mergeInfo
+            )
+        }
     }
 
     func repository(repo _: String) async throws -> RepositoryInfo {
@@ -292,14 +327,36 @@ actor GatedGitHubAPI: GitHubAPI {
         .stub(push: true)
     }
 
-    func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
+    /// Park the caller inside the gate: signal it has been entered (unblocking `waitUntilBlocked`),
+    /// then suspend until `release()`. Shared by `checkRuns` and `pullRequestBatch` so the in-flight
+    /// race test drives whichever hydration path the store takes.
+    private func enterGateAndWait() async {
         entered = true
         enteredGate?.resume()
         enteredGate = nil
         if !released {
             await withCheckedContinuation { releaseGate = $0 }
         }
+    }
+
+    func checkRuns(repo _: String, ref _: String) async throws -> [CheckRun] {
+        await enterGateAndWait()
         return checkRunsResult
+    }
+
+    /// GraphQL batch path — blocks in the same gate as `checkRuns` so the sign-out-during-hydration
+    /// race test applies whether the store hydrates via GraphQL (default) or REST.
+    func pullRequestBatch(_ refs: [PRRef]) async throws -> [PRRef: PullRequestBundle] {
+        await enterGateAndWait()
+        let mergeInfo = RepoMergeInfo(canMerge: true, allowedMethods: MergeMethod.allCases)
+        return refs.reduce(into: [:]) { out, ref in
+            out[ref] = PullRequestBundle(
+                detail: pullRequestResult,
+                reviews: [],
+                checkRuns: checkRunsResult,
+                mergeInfo: mergeInfo
+            )
+        }
     }
 
     func currentUser() async throws -> GitHubUser {
