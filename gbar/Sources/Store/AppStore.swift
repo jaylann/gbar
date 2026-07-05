@@ -43,16 +43,17 @@ final class AppStore {
     /// hydrated → the row stays optimistic (buttons show). Written only by the hydration wave
     /// and the reset sites here; views read only.
     var prGates: [PRCheckKey: PRGate] = [:]
-    /// Monotonic write clock for `prGates`. Both writers — the hydration wave's fresh full-fetch
-    /// (`publishChecks`) and the merge-readiness poll's single-key write (`refreshPRState`) —
-    /// stamp their keys with the next tick, so a batch republish can resolve each key by
-    /// write-recency instead of clobbering a newer poll write with an older pre-fetch snapshot
-    /// (#84) — while a genuinely fresher wave fetch still wins. Bookkeeping, never read from a
-    /// view.
+    /// Monotonic clock for `prGates` writes. Both writers — the hydration wave's fresh full-fetch
+    /// (`publishChecks`) and the merge-readiness poll's single-key write (`refreshPRState`) — take
+    /// a tick when they *issue* their detail fetch, so a batch republish can resolve each key by
+    /// which fetch read the newer server state instead of clobbering a fresher gate with a staler
+    /// one (#84). Issue-time, not commit-time: the wave's full fetch folds only after its slow
+    /// checks/reviews legs, so a fetch that observed an older gate can commit *after* a fresher
+    /// poll write — issue order is the honest recency signal. Bookkeeping, never read from a view.
     @ObservationIgnored
     var gateWriteClock = 0
-    /// The `gateWriteClock` tick at which each live `prGates[key]` value was last established by a
-    /// genuine fetch (see `gateWriteClock`). Pruned alongside `prGates`.
+    /// The `gateWriteClock` issue tick of the fetch whose result currently sits in `prGates[key]`
+    /// (see `gateWriteClock`). Pruned alongside `prGates`.
     @ObservationIgnored
     var prGateSeq: [PRCheckKey: Int] = [:]
     /// What each PR looked like at its last successful hydration — the `updated_at` we hydrated
