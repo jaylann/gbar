@@ -41,7 +41,6 @@ enum GitHubGraphQL {
         contexts(first: 100) { nodes {
           __typename
           ... on CheckRun { databaseId name status conclusion startedAt completedAt }
-          ... on StatusContext { context state createdAt }
         } }
       } } } }
     }

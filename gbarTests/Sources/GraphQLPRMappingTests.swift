@@ -63,8 +63,8 @@ final class GraphQLPRMappingTests: XCTestCase {
         XCTAssertEqual(bundle.reviews.first?.user?.login, "octocat")
         XCTAssertEqual(bundle.reviews.first?.state, "APPROVED")
 
-        // CheckRun failure + StatusContext success → the rollup is a failure.
-        XCTAssertEqual(bundle.checkRuns.count, 2)
+        // Only the CheckRun is consumed (the StatusContext is filtered to match REST) → failure.
+        XCTAssertEqual(bundle.checkRuns.count, 1)
         XCTAssertEqual(bundle.checkRuns.ciRollup, .failure)
 
         // WRITE permission → mergeable; squash disabled → only merge + rebase offered.
@@ -95,12 +95,13 @@ final class GraphQLPRMappingTests: XCTestCase {
         }
     }
 
-    func testStatusContextSynthesizedIntoCheckRun() throws {
+    /// Legacy StatusContext nodes are filtered out so the CI rollup matches the REST check-runs
+    /// endpoint exactly (which never returns commit statuses) — no divergence between the batch
+    /// path and its REST fallback.
+    func testStatusContextFilteredToMatchREST() throws {
         let bundle = try XCTUnwrap(GitHubGraphQL.decodeBatch(fixture(), for: refs)[refs[0]])
-        let legacy = try XCTUnwrap(bundle.checkRuns.first { $0.name == "ci/legacy" })
-        XCTAssertEqual(legacy.status, "completed")
-        XCTAssertEqual(legacy.conclusion, "success")
-        XCTAssertEqual(legacy.ciStatus, .success)
+        XCTAssertFalse(bundle.checkRuns.contains { $0.name == "ci/legacy" }, "legacy status must be dropped")
+        XCTAssertTrue(bundle.checkRuns.allSatisfy { $0.name == "CI / build" })
     }
 
     func testTopLevelErrorsWithoutDataThrows() {

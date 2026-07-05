@@ -116,25 +116,24 @@ extension GitHubGraphQL {
     struct Rollup: Decodable { let contexts: ContextConnection? }
     struct ContextConnection: Decodable { let nodes: [ContextNode]? }
 
-    /// A `statusCheckRollup` context — either a `CheckRun` (Actions/apps) or a legacy
-    /// `StatusContext` (commit status API). The two shapes are merged into one optional-heavy
-    /// struct discriminated by `__typename`.
+    /// One `statusCheckRollup` context. The rollup is a union of `CheckRun` (Actions/apps) and
+    /// legacy `StatusContext` (commit-status API) nodes; we deliberately consume **only**
+    /// `CheckRun`s — discriminated by `__typename` — so the batch's CI state matches the REST
+    /// `commits/{sha}/check-runs` endpoint exactly (it never returns legacy statuses). A
+    /// `StatusContext` node therefore decodes with only `__typename` populated and is filtered out
+    /// in `bundle(repo:)`. Extending CI to commit statuses would need both paths changed together.
     struct ContextNode: Decodable {
         let typename: String
-        // CheckRun
         let databaseId: Int?
         let name: String?
         let status: String?
         let conclusion: String?
         let startedAt: Date?
         let completedAt: Date?
-        // StatusContext
-        let context: String?
-        let state: String?
 
         enum CodingKeys: String, CodingKey {
             case typename = "__typename"
-            case databaseId, name, status, conclusion, startedAt, completedAt, context, state
+            case databaseId, name, status, conclusion, startedAt, completedAt
         }
     }
 }
@@ -176,7 +175,10 @@ extension GitHubGraphQL.PRNode {
                 submittedAt: node.submittedAt
             )
         }
-        let contexts = commits?.nodes?.first?.commit.statusCheckRollup?.contexts?.nodes ?? []
+        // Consume only CheckRun contexts, filtering out legacy StatusContext nodes, so the CI
+        // rollup matches the REST check-runs endpoint exactly (see `ContextNode`).
+        let contexts = (commits?.nodes?.first?.commit.statusCheckRollup?.contexts?.nodes ?? [])
+            .filter { $0.typename == "CheckRun" }
         let checkRuns = contexts.enumerated().map { index, node in node.checkRun(index: index) }
         return PullRequestBundle(
             detail: detail,
@@ -213,23 +215,12 @@ extension GitHubGraphQL.PRNode {
 }
 
 extension GitHubGraphQL.ContextNode {
-    /// Map one rollup context onto a `CheckRun` so the existing `ciRollup`/`checkRowModel` logic
-    /// consumes it. GraphQL enum values are upper-cased; a `CheckRun` node lower-cases its
-    /// status/conclusion to match REST, while a legacy `StatusContext` is synthesised into an
-    /// equivalent completed/pending run. `index` guarantees a unique id when `databaseId` is absent.
+    /// Map one `CheckRun` rollup context onto the REST `CheckRun` so the existing
+    /// `ciRollup`/`checkRowModel` logic consumes it. GraphQL enum values are upper-cased, so the
+    /// status/conclusion are lower-cased to match REST. `index` guarantees a unique id in the rare
+    /// case `databaseId` is absent (only `CheckRun` nodes reach here; they always carry one).
     func checkRun(index: Int) -> CheckRun {
-        if typename == "StatusContext" {
-            let (mappedStatus, mappedConclusion) = Self.statusContextOutcome(state)
-            return CheckRun(
-                id: databaseId ?? index,
-                name: context ?? "status",
-                status: mappedStatus,
-                conclusion: mappedConclusion,
-                startedAt: nil,
-                completedAt: nil
-            )
-        }
-        return CheckRun(
+        CheckRun(
             id: databaseId ?? index,
             name: name ?? "check",
             status: status?.lowercased() ?? "",
@@ -237,17 +228,6 @@ extension GitHubGraphQL.ContextNode {
             startedAt: startedAt,
             completedAt: completedAt
         )
-    }
-
-    /// Legacy commit-status `state` → a `(status, conclusion)` pair matching what `CheckRun.ciStatus`
-    /// expects: success/failure resolve to `completed`; pending/expected read as in-progress.
-    private static func statusContextOutcome(_ state: String?) -> (status: String, conclusion: String?) {
-        switch state {
-        case "SUCCESS": ("completed", "success")
-        case "FAILURE",
-             "ERROR": ("completed", "failure")
-        default: ("in_progress", nil) // PENDING / EXPECTED / unknown → not yet settled
-        }
     }
 }
 
