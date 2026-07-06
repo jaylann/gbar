@@ -41,6 +41,30 @@ enum AppConfig {
         return URL(string: "\(scheme)://\(host)\(port)") ?? fallback
     }
 
+    /// Derives the GraphQL endpoint from a REST API base URL — a different host/path than REST.
+    ///
+    /// - `api.github.com` (REST) maps to `https://api.github.com/graphql`.
+    /// - Enterprise **Cloud with data residency** (`https://api.<tenant>.ghe.com`) maps to
+    ///   `https://api.<tenant>.ghe.com/graphql` — GraphQL lives at `/graphql` on the same
+    ///   `api.`-prefixed host, with no `/api` segment (mirrors public GitHub's layout).
+    /// - Enterprise **Server** (`https://ghe.example.com/api/v3`) maps to
+    ///   `https://ghe.example.com/api/graphql` (same host, `/api/graphql` in place of `/api/v3`).
+    /// - Anything we can't parse falls back to the public `https://api.github.com/graphql`.
+    static func graphQLURL(forAPI apiBaseURL: URL) -> URL {
+        let fallback = URL(string: "https://api.github.com/graphql") ?? URL(fileURLWithPath: "/")
+        guard let components = URLComponents(url: apiBaseURL, resolvingAgainstBaseURL: false),
+              let host = components.host, !host.isEmpty
+        else { return fallback }
+
+        let scheme = components.scheme ?? "https"
+        let port = components.port.map { ":\($0)" } ?? ""
+        // An `api.`-prefixed host (public `api.github.com` or GHE Cloud data-residency
+        // `api.<tenant>.ghe.com`) serves GraphQL at `/graphql`; a path-based Enterprise
+        // Server host (`ghe.example.com/api/v3`) serves it at `/api/graphql`.
+        let path = host.hasPrefix("api.") ? "/graphql" : "/api/graphql"
+        return URL(string: "\(scheme)://\(host)\(port)\(path)") ?? fallback
+    }
+
     private static func value(for key: String) -> String? {
         guard let raw = Bundle.main.object(forInfoDictionaryKey: key) as? String else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

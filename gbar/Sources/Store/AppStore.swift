@@ -194,6 +194,13 @@ final class AppStore {
     /// still revealing CI state progressively.
     static let checksFlushBatch = 8
 
+    /// Whether the CI/gate hydration wave uses the batched GraphQL query (`pullRequestBatch`,
+    /// one round-trip per account) instead of the per-PR REST triple. On by default; any GraphQL
+    /// failure (a GHE server missing a field, a transport error) auto-falls-back to the REST path
+    /// per account. Tests flip it to `false` to exercise the REST short-circuit path directly.
+    @ObservationIgnored
+    var useGraphQLBatch = true
+
     /// Persistence backend for all non-secret state (the `didSet` writes above/below).
     /// `.standard` in the app; the test init substitutes an isolated, wiped suite so store
     /// mutations in tests can never leak into the real `dev.lanfermann.gbar` domain.
