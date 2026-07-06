@@ -223,13 +223,70 @@ extension AppStore {
         // Carry each PR alongside its key so the completion step can build a CI banner.
         let issueByKey = Dictionary(uniqueKeysWithValues: prs.map { ($0.key, $0.issue) })
         return Task { [weak self] in
-            // Resolve per-repo merge info first so each PR's gate knows it up front.
-            await self?.hydrateRepoPermissions(prs: prs, generation: generation)
-            let mergeInfoByKey = self?.mergePermissions(for: prs) ?? [:]
-            await self?.drainChecks(
-                prs: prs, mergeInfoByKey: mergeInfoByKey, issueByKey: issueByKey, generation: generation
+            guard let self else { return }
+            // GraphQL fast path: one batched query per account (detail + reviews + checks + repo
+            // merge signals), collapsing the per-PR REST N+1. Any account/PR the batch can't cover
+            // drops to the REST path below.
+            var restPRs = prs
+            if useGraphQLBatch {
+                restPRs = await drainBatched(prs: prs, issueByKey: issueByKey, generation: generation)
+            }
+            guard !restPRs.isEmpty else { return }
+            // REST fallback (and the whole path when GraphQL is disabled): resolve per-repo merge
+            // info first so each PR's gate knows it up front, then run the per-PR fetch wave.
+            await hydrateRepoPermissions(prs: restPRs, generation: generation)
+            let mergeInfoByKey = mergePermissions(for: restPRs)
+            await drainChecks(
+                prs: restPRs, mergeInfoByKey: mergeInfoByKey, issueByKey: issueByKey, generation: generation
             )
         }
+    }
+
+    /// GraphQL fast path: issue one `pullRequestBatch` per account, map each returned bundle through
+    /// the same `deriveGate`/`ciRollup` logic the REST path uses, and fold the results via the shared
+    /// publish path. Returns the PRs that still need REST hydration — those on an account whose batch
+    /// threw (a GHE server missing a field, a transport error) or a PR the batch couldn't resolve
+    /// (no access). Each bundle's repo merge info is folded into `repoMergeInfo` so a later gate-only
+    /// `refreshPRState` after an approval still finds it. Stale runs (a superseded generation) bail.
+    private func drainBatched(prs: [PRFetch], issueByKey: [PRCheckKey: SearchIssue], generation: Int) async
+        -> [PRFetch]
+    {
+        var fallback: [PRFetch] = []
+        // Seed from the (already pruned) live maps so absent keys stay absent, matching drainChecks.
+        var pending = PendingHydration(checks: prChecks, gates: prGates, marks: prHydrationMark)
+        var didFold = false
+        for (_, accountPRs) in Dictionary(grouping: prs, by: { $0.key.accountID }) {
+            guard let api = accountPRs.first?.api else { continue }
+            let refs = accountPRs.map { PRRef(repo: $0.issue.repositorySlug, number: $0.issue.number) }
+            // Issue-time write-clock tick per PR — assigned *before* the batch fetch (each bundle
+            // carries a full gate), so a batch that observed an older gate loses to a merge-poll
+            // write issued after it, matching the REST drain's per-fetch stamping (#84). Ticked on
+            // the actor here since the fetch below is the only suspension point.
+            let issueSeq = accountPRs.reduce(into: [PRCheckKey: Int]()) { $0[$1.key] = nextGateWriteSeq() }
+            guard let bundles = try? await api.pullRequestBatch(refs) else {
+                // Whole-account failure → REST fallback for all of its PRs.
+                fallback.append(contentsOf: accountPRs)
+                continue
+            }
+            guard checksGeneration == generation else { return [] } // superseded — drop, no fallback
+            for pr in accountPRs {
+                let ref = PRRef(repo: pr.issue.repositorySlug, number: pr.issue.number)
+                guard let bundle = bundles[ref] else {
+                    fallback.append(pr) // node absent (no access) → try REST for this one
+                    continue
+                }
+                if let mergeInfo = bundle.mergeInfo {
+                    repoMergeInfo[repoPermissionKey(accountID: pr.key.accountID, slug: pr.issue.repositorySlug)]
+                        = mergeInfo
+                }
+                let state = Self.state(from: bundle, login: pr.login, repo: pr.issue.repositorySlug)
+                let freshSeq = state.gate != nil ? issueSeq[pr.key] : nil
+                fold(key: pr.key, state: state, issueByKey: issueByKey, gateIssueSeq: freshSeq, into: &pending)
+                didFold = true
+            }
+        }
+        if didFold { publishChecks(pending, generation: generation) }
+        return fallback
     }
 
     /// Run the capped-concurrency detail+check-runs fetch for `prs`, folding each result into

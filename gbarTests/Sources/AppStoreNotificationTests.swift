@@ -319,6 +319,7 @@ final class AppStoreNotificationTests: XCTestCase {
         seed.pullRequestResult = .stub(number: 7, headSHA: "deadbeef", mergeableState: "blocked")
         seed.checkRunsResult = [.stub(id: 1, name: "CI", conclusion: "success")]
         let store = try makeStore(api: seed)
+        store.useGraphQLBatch = false // exercises the REST checks-only skip path
         let spy = SpyNotifier()
         store.notifier = spy
 

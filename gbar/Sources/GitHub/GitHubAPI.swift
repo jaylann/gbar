@@ -18,6 +18,23 @@ enum MergeMethod: String, CaseIterable {
     }
 }
 
+/// One PR to hydrate in a batch: repo `owner/name` slug + number.
+struct PRRef: Hashable {
+    let repo: String
+    let number: Int
+}
+
+/// Detail + reviews + check-runs + the viewer's repo merge signals for one PR, in the same
+/// decoded shapes the REST path produces — so the store's existing `deriveGate`/`ciRollup` logic
+/// consumes a batched result unchanged. `mergeInfo` is nil when GraphQL omitted the repo's
+/// permissions (→ an optimistic gate, matching a missing `repoMergeInfo` cache entry).
+struct PullRequestBundle {
+    let detail: PullRequestDetail
+    let reviews: [PullRequestReview]
+    let checkRuns: [CheckRun]
+    let mergeInfo: RepoMergeInfo?
+}
+
 /// The GitHub data surface gbar needs. A protocol so the store can be tested against a
 /// fake, and so a future hosted/webhook backend can drop in behind the same interface.
 protocol GitHubAPI: Sendable {
@@ -30,6 +47,12 @@ protocol GitHubAPI: Sendable {
     func pullRequest(repo: String, number: Int) async throws -> PullRequestDetail
     /// Fetch the reviews submitted on a pull request (`owner/name` slug + number).
     func reviews(repo: String, number: Int) async throws -> [PullRequestReview]
+    /// Batch-hydrate many PRs — detail + reviews + check-runs + repo merge signals — in one (or a
+    /// few internally-chunked) GraphQL round-trip(s), collapsing the per-PR REST N+1. Best-effort
+    /// per node: a PR the viewer can't resolve comes back absent (skipped, like a failed REST
+    /// fetch). Throws on a transport/decode/whole-response GraphQL failure so the caller can fall
+    /// back to the per-PR REST path (GitHub Enterprise servers may not expose every field).
+    func pullRequestBatch(_ refs: [PRRef]) async throws -> [PRRef: PullRequestBundle]
     /// Fetch a repository's detail (`owner/name` slug) — used for the viewer's permissions.
     func repository(repo: String) async throws -> RepositoryInfo
     /// Submit an approving review on a pull request, with an optional review body.
@@ -64,6 +87,10 @@ struct GitHubClient: GitHubAPI {
         /// (nil when GitHub sent neither). The poll loop backs off to this time instead of
         /// hammering the same cadence into a longer lockout.
         case rateLimited(until: Date?)
+        /// A GraphQL response carried a top-level `errors` array with no usable `data` (a malformed
+        /// query, a revoked scope, or a GHE version missing a requested field). The batch caller
+        /// catches this and falls back to the per-PR REST hydration.
+        case graphQL(String)
     }
 
     let baseURL: URL
@@ -154,6 +181,28 @@ struct GitHubClient: GitHubAPI {
         let request = try makeRequest(path: "repos/\(repo)")
         let data = try await execute(request)
         return try Self.decoder.decode(RepositoryInfo.self, from: data)
+    }
+
+    /// How many PRs to pack into a single GraphQL query. A point-based query stays well within
+    /// GitHub's 500k-node limit at this width, and keeps any one request's response bounded; the
+    /// chunks run sequentially so a large inbox never fans out a burst of concurrent POSTs.
+    static let graphQLBatchSize = 25
+
+    func pullRequestBatch(_ refs: [PRRef]) async throws -> [PRRef: PullRequestBundle] {
+        guard !refs.isEmpty else { return [:] }
+        let endpoint = AppConfig.graphQLURL(forAPI: baseURL)
+        var result: [PRRef: PullRequestBundle] = [:]
+        // Chunk sequentially: one POST per ≤`graphQLBatchSize` PRs, merged into the result. A
+        // per-chunk failure propagates so the whole account falls back to REST (partial GraphQL +
+        // partial REST would double-hydrate and muddy the request-budget win).
+        for chunk in refs.chunked(into: Self.graphQLBatchSize) {
+            let payload = GitHubGraphQL.batchQuery(for: chunk)
+            let request = try makeGraphQLRequest(url: endpoint, body: payload)
+            let data = try await execute(request)
+            let bundles = try GitHubGraphQL.decodeBatch(data, for: chunk)
+            result.merge(bundles) { _, new in new }
+        }
+        return result
     }
 
     func approvePullRequest(repo: String, number: Int, body: String?) async throws {
@@ -326,6 +375,24 @@ struct GitHubClient: GitHubAPI {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try Self.encoder.encode(body)
         }
+        return request
+    }
+
+    /// Build a POST to the GraphQL endpoint (a different host/path than the REST `baseURL`, so it
+    /// takes an explicit `url`) carrying gbar's standard auth/version headers and a JSON body.
+    /// Reuses the https guard so the bearer token never crosses cleartext. Unlike the REST helper
+    /// this uses the default cache policy — GraphQL POSTs aren't cached/revalidated (no ETag), and
+    /// the batch's whole value is one fresh round-trip.
+    private func makeGraphQLRequest(url: URL, body: GitHubGraphQL.RequestBody) throws -> URLRequest {
+        guard url.scheme?.lowercased() == "https" else { throw ClientError.badURL }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        request.setValue("gbar", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try Self.encoder.encode(body)
         return request
     }
 

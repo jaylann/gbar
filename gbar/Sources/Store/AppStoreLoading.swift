@@ -167,14 +167,34 @@ extension AppStore {
     -> PRChecks? {
         do {
             let runs = try await api.checkRuns(repo: repo, ref: ref)
-            guard let status = runs.ciRollup else { return nil }
-            let models = runs.map { $0.checkRowModel(repo: repo, branch: branch) }
-            return PRChecks(status: status, checks: models)
+            return checksModel(from: runs, repo: repo, branch: branch)
         } catch {
             Log.network
                 .debug("ci skip #\(number, privacy: .public): \(error.localizedDescription, privacy: .public)")
             return nil
         }
+    }
+
+    /// Roll a set of already-fetched check runs into a `PRChecks`, or nil when the PR has none.
+    /// Pure — shared by the REST `fetchChecks` and the GraphQL batch path (`state(from:)`), so both
+    /// derive the CI status and rows identically.
+    nonisolated static func checksModel(from runs: [CheckRun], repo: String, branch: String) -> PRChecks? {
+        guard let status = runs.ciRollup else { return nil }
+        let models = runs.map { $0.checkRowModel(repo: repo, branch: branch) }
+        return PRChecks(status: status, checks: models)
+    }
+
+    /// Build a `PRState` from a batched `PullRequestBundle` using the same `deriveGate`/`ciRollup`
+    /// logic the REST path runs — so a GraphQL-hydrated PR is indistinguishable from a REST one
+    /// downstream. `repo` labels the check rows; `login` spots the viewer's own approval — for the
+    /// viewer's own PR reviews are ignored (Approve is hidden in the row anyway), matching
+    /// `fetchPRState`, so `alreadyApproved` never reads a self-approval.
+    nonisolated static func state(from bundle: PullRequestBundle, login: String, repo: String) -> PRState {
+        let checks = checksModel(from: bundle.checkRuns, repo: repo, branch: bundle.detail.head.ref)
+        let isOwnPR = bundle.detail.user?.login.lowercased() == login.lowercased()
+        let reviews = isOwnPR ? [] : bundle.reviews
+        let gate = deriveGate(detail: bundle.detail, reviews: reviews, login: login, mergeInfo: bundle.mergeInfo)
+        return PRState(checks: checks, gate: gate, head: bundle.detail.head)
     }
 
     /// Derive the action gate from PR detail + reviews. Pure so it's unit-testable.
