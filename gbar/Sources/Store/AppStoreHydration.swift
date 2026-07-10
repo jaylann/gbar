@@ -234,6 +234,11 @@ extension AppStore {
     /// Returns `false` (hydrate normally) when not rate-limited.
     func hydrationSkippedForRateLimit(apis: [Account.ID: GitHubAPI]) -> Bool {
         guard rateLimitedUntil.map({ $0 > Date() }) == true else { return false }
+        // Supersede any wave still in flight from the previous poll: its `pending` snapshot predates
+        // this prune, so letting it publish would re-add the exact stale keys pruned below (and it
+        // would keep burning the rate-limited budget).
+        checksTask?.cancel()
+        checksGeneration += 1
         pruneHydrationMaps(keepingLive: Set(distinctPRFetches(from: sections, apis: apis).map(\.key)))
         hasLoadedRepoFeeds = true
         return true
