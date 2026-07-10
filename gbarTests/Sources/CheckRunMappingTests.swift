@@ -71,6 +71,19 @@ final class CheckRunMappingTests: XCTestCase {
         XCTAssertEqual(runs.ciRollup, .success)
     }
 
+    /// A set of only neutral runs (all skipped/cancelled/neutral) is NOT a pass: it must roll up to
+    /// `.neutral`, not `.success` — otherwise the row shows a green dot and a spurious "CI passed"
+    /// banner can fire on the pending→success transition.
+    func testRollupAllNeutralIsNeutralNotSuccess() {
+        for conclusion in ["neutral", "skipped", "cancelled"] {
+            let runs = [
+                CheckRun.stub(id: 1, conclusion: conclusion),
+                CheckRun.stub(id: 2, conclusion: conclusion),
+            ]
+            XCTAssertEqual(runs.ciRollup, .neutral, "all-\(conclusion) must roll up to .neutral")
+        }
+    }
+
     // MARK: - CheckRow.Model mapping
 
     func testCheckRowModelMapsFields() {

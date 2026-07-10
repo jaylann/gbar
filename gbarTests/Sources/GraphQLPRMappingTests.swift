@@ -105,6 +105,61 @@ final class GraphQLPRMappingTests: XCTestCase {
         XCTAssertTrue(bundle.checkRuns.allSatisfy { $0.name == "CI / build" })
     }
 
+    /// A MERGED PR must map to the REST representation — `state == "closed"` + `merged == true` —
+    /// so a GraphQL-hydrated merged PR is indistinguishable from a REST one (REST has no "merged"
+    /// state; it reports a merged PR as closed with the merged flag set).
+    func testMergedStateNormalizedToClosed() throws {
+        let json = """
+        {
+          "data": {
+            "r0": {
+              "viewerPermission": "WRITE",
+              "pullRequest": {
+                "number": 7, "state": "MERGED", "isDraft": false,
+                "mergeable": "UNKNOWN", "mergeStateStatus": "UNKNOWN",
+                "headRefOid": "abc123", "headRefName": "feature/x",
+                "title": "A PR", "url": "https://github.com/octo/repo/pull/7", "databaseId": 700,
+                "author": { "login": "contributor" }
+              }
+            }
+          }
+        }
+        """
+        let bundle = try XCTUnwrap(GitHubGraphQL.decodeBatch(Data(json.utf8), for: refs)[refs[0]])
+        XCTAssertEqual(bundle.detail.state, "closed", "MERGED must fold to REST's closed state")
+        XCTAssertEqual(bundle.detail.merged, true)
+    }
+
+    /// A CheckRun whose `status` is absent but whose `conclusion` is present is a finished run;
+    /// it must classify by its conclusion, not fall through to pending. Regression against mapping
+    /// a null status to "" (which `CheckRun.ciStatus` reads as pending).
+    func testNullCheckStatusWithConclusionClassifiesAsCompleted() throws {
+        let json = """
+        {
+          "data": {
+            "r0": {
+              "viewerPermission": "WRITE",
+              "pullRequest": {
+                "number": 7, "state": "OPEN", "isDraft": false,
+                "headRefOid": "abc123", "headRefName": "feature/x",
+                "title": "A PR", "url": "https://github.com/octo/repo/pull/7", "databaseId": 700,
+                "commits": { "nodes": [ { "commit": { "statusCheckRollup": {
+                  "contexts": { "nodes": [
+                    { "__typename": "CheckRun", "databaseId": 11, "name": "CI / build",
+                      "conclusion": "SUCCESS" }
+                  ] }
+                } } } ] }
+              }
+            }
+          }
+        }
+        """
+        let bundle = try XCTUnwrap(GitHubGraphQL.decodeBatch(Data(json.utf8), for: refs)[refs[0]])
+        let run = try XCTUnwrap(bundle.checkRuns.first)
+        XCTAssertEqual(run.status, "completed", "a null status maps to completed, not empty")
+        XCTAssertEqual(bundle.checkRuns.ciRollup, .success, "conclusion SUCCESS on a finished run")
+    }
+
     func testTopLevelErrorsWithoutDataThrows() {
         let json = Data(#"{"data":null,"errors":[{"message":"Field 'mergeStateStatus' doesn't exist"}]}"#.utf8)
         XCTAssertThrowsError(try GitHubGraphQL.decodeBatch(json, for: refs)) { error in

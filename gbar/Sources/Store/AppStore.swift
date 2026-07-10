@@ -412,11 +412,7 @@ final class AppStore {
     /// credential for migration on the next refresh.
     private func restorePersistedAccounts() {
         if let data = defaults.data(forKey: Self.accountsKey) {
-            do {
-                accounts = try JSONDecoder().decode([Account].self, from: data)
-            } catch {
-                Log.store.error("accounts decode failed: \(error.localizedDescription, privacy: .public)")
-            }
+            accounts = Self.decodePersistedAccounts(from: data)
         }
         if let filter = defaults.string(forKey: Self.accountFilterKey),
            accounts.contains(where: { $0.id == filter })
@@ -566,8 +562,8 @@ extension AppStore {
     /// are an N+1 over the PR list, so skipping them while limited avoids digging the hole deeper
     /// (the sections/notifications that already loaded still show; feeds rehydrate next poll).
     private func kickOffHydration(accountAPIs: [(account: Account, api: GitHubAPI)]) {
-        if rateLimitedUntil.map({ $0 > Date() }) == true { return }
         let apis = Dictionary(uniqueKeysWithValues: accountAPIs.map { ($0.account.id, $0.api) })
+        guard !hydrationSkippedForRateLimit(apis: apis) else { return }
         hydrateChecks(for: sections, apis: apis)
         hydrateRepoFeeds(apis: apis)
     }
@@ -700,7 +696,11 @@ extension AppStore {
         expiredAccountID = nil
         reauthStatus = .idle
         startPolling()
-        await refresh()
+        // Force: a poll refresh may already be in flight, built from the account list *before* this
+        // account was appended. A non-force call would coalesce onto it and return, leaving the new
+        // account's data unloaded until the next poll (or never, with polling off). Supersede it so
+        // the new account loads now — mirroring `reconnect` (#10).
+        await refresh(force: true)
     }
 
     /// Remove one account: drop its token, metadata, and all of its merged data. If it was the
@@ -715,6 +715,11 @@ extension AppStore {
         checksGeneration += 1
         repoFeedsTask?.cancel()
         repoFeedsGeneration += 1
+        // A post-approve merge-readiness poll captured an `AccountItem` and API client that may
+        // belong to the account being removed; cancel it so it stops polling with (and holding)
+        // removed-account state. It nils itself only on normal completion, so nil it here.
+        mergeReadinessTask?.cancel()
+        mergeReadinessTask = nil
         sections = sections.map { section in
             LoadedSection(
                 id: section.id,
@@ -786,6 +791,7 @@ extension AppStore {
         hasLoaded = false
         sessionExpired = false
         expiredAccountID = nil
+        rateLimitedUntil = nil
         reauthStatus = .idle
         lastErrorMessage = nil
         // Reset every notification baseline so the next sign-in re-seeds silently instead of

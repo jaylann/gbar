@@ -2,7 +2,7 @@ name: require milestone
 
 on:
   pull_request:
-    types: [opened, edited, reopened, synchronize, ready_for_review, demilestoned]
+    types: [opened, edited, reopened, synchronize, ready_for_review, milestoned, demilestoned]
 
 permissions:
   pull-requests: read

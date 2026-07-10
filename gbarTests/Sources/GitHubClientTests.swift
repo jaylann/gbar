@@ -547,6 +547,71 @@ final class GitHubClientTests: XCTestCase {
         }
     }
 
+    /// A secondary-limit 403 that carries only `X-RateLimit-Reset` (no `Remaining: 0`, no
+    /// `Retry-After`) still maps to `.rateLimited`, with the reset read from that epoch header.
+    func testForbiddenWithResetHeaderMapsToRateLimited() async throws {
+        let reset = Date().addingTimeInterval(90)
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let headers = ["X-RateLimit-Reset": String(Int(reset.timeIntervalSince1970))]
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: headers)
+            )
+            return (response, Data())
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.searchIssues("is:open")
+            XCTFail("Expected rate-limit error")
+        } catch let GitHubClient.ClientError.rateLimited(until) {
+            let until = try XCTUnwrap(until)
+            XCTAssertEqual(until.timeIntervalSince1970, reset.timeIntervalSince1970, accuracy: 1)
+        }
+    }
+
+    /// A secondary/abuse-limit 403 identified only by its body (no rate-limit headers at all) still
+    /// maps to `.rateLimited` so the store backs off; `until` is nil (store applies its default).
+    func testForbiddenWithSecondaryRateLimitBodyMapsToRateLimited() async throws {
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 403, httpVersion: nil, headerFields: nil)
+            )
+            let body = #"{"message":"You have exceeded a secondary rate limit. Please wait a few minutes."}"#
+            return (response, Data(body.utf8))
+        }
+
+        let client = try makeClient()
+        do {
+            _ = try await client.searchIssues("is:open")
+            XCTFail("Expected rate-limit error")
+        } catch let GitHubClient.ClientError.rateLimited(until) {
+            XCTAssertNil(until)
+        }
+    }
+
+    /// A literal `+` in a saved search (e.g. `c++`) must reach `/search/issues` as `%2B`, not a
+    /// space — `URLComponents` leaves `+` unescaped, so the client re-encodes it.
+    func testSearchQueryEncodesPlusAsPercent2B() async throws {
+        let box = HeaderBox()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            box.path = url.absoluteString
+            let response = try XCTUnwrap(
+                HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: nil)
+            )
+            return (response, Data(#"{"total_count":0,"items":[]}"#.utf8))
+        }
+
+        let client = try makeClient()
+        _ = try await client.searchIssues("c++ in:title")
+
+        let urlString = try XCTUnwrap(box.path)
+        XCTAssertTrue(urlString.contains("c%2B%2B"), "expected + encoded as %2B, got: \(urlString)")
+        XCTAssertFalse(urlString.contains("c++"))
+    }
+
     func testMarkAllNotificationsReadHitsExpectedPath() async throws {
         let box = HeaderBox()
         MockURLProtocol.handler = { request in

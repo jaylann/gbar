@@ -174,6 +174,12 @@ struct GitHubClient: GitHubAPI {
             guard Self.hasNextPage(response) else { return all }
             page += 1
         }
+        // Hit the cap with a `rel="next"` still advertised: we keep the OLDEST pages, so the
+        // viewer's newest verdict may be missing and the derived gate can read stale. Rare (needs
+        // >`reviewsPageCap * reviewsPerPage` reviews), but log it — same as `starredRepos`.
+        let cap = Self.reviewsPageCap * Self.reviewsPerPage
+        Log.network
+            .warning("reviews for \(repo, privacy: .public)#\(number) truncated at \(cap, privacy: .public)")
         return all
     }
 
@@ -352,6 +358,11 @@ struct GitHubClient: GitHubAPI {
             throw ClientError.badURL
         }
         components.queryItems = queryItems
+        // `URLComponents` leaves a literal `+` unescaped in query values, so GitHub reads it as a
+        // space — a saved search like `c++` would silently become `c  `. Re-encode `+` as `%2B`.
+        if let query = components.percentEncodedQuery {
+            components.percentEncodedQuery = query.replacingOccurrences(of: "+", with: "%2B")
+        }
         guard let url = components.url else { throw ClientError.badURL }
         // Never send the bearer token over cleartext: reject a non-https base URL (e.g. a
         // misconfigured Enterprise host pasted as `http://…`) rather than leaking credentials.
@@ -421,15 +432,29 @@ struct GitHubClient: GitHubAPI {
         // secondary limit.
         if http.statusCode == 403 || http.statusCode == 429 {
             let remaining = http.value(forHTTPHeaderField: "X-RateLimit-Remaining")
-            if remaining == "0" || http.value(forHTTPHeaderField: "Retry-After") != nil {
+            // A secondary/abuse-limit 403 often carries neither `Remaining: 0` nor `Retry-After` —
+            // only an `X-RateLimit-Reset` and/or a "secondary rate limit"/"abuse" body. Treat those
+            // as rate limits too, or the store never backs off and keeps tripping the same limit.
+            if remaining == "0"
+                || http.value(forHTTPHeaderField: "Retry-After") != nil
+                || http.value(forHTTPHeaderField: "X-RateLimit-Reset") != nil
+                || Self.bodyMentionsRateLimit(data)
+            {
                 throw ClientError.rateLimited(until: Self.rateLimitReset(from: http))
             }
         }
         throw ClientError.http(http.statusCode)
     }
 
+    /// Whether a 403 body reads as a secondary/abuse rate limit rather than a permission failure.
+    private static func bodyMentionsRateLimit(_ data: Data) -> Bool {
+        guard let body = String(data: data, encoding: .utf8)?.lowercased() else { return false }
+        return body.contains("secondary rate limit") || body.contains("abuse")
+    }
+
     /// When GitHub says access resumes, from `Retry-After` (relative seconds) or the absolute
-    /// `X-RateLimit-Reset` epoch; nil when neither header is present.
+    /// `X-RateLimit-Reset` epoch; nil when neither header is present (the store then applies its
+    /// own ~60s default back-off).
     private static func rateLimitReset(from http: HTTPURLResponse) -> Date? {
         if let retryAfter = http.value(forHTTPHeaderField: "Retry-After").flatMap(Double.init) {
             return Date().addingTimeInterval(retryAfter)

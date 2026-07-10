@@ -25,7 +25,7 @@ cat >&2 <<'EOF'
 
   type   one of: feat fix chore docs refactor test perf style ci build revert
   scope  optional, lowercase kebab-case in parens
-  subject lowercase start, no trailing period, <=72 chars total on line 1
+  subject lowercase start, no trailing period, <=72 chars (the text after the colon)
   breaking change: add ! after type/scope, e.g. feat(api)!: drop v1
 
 Bypass (discouraged): git commit --no-verify

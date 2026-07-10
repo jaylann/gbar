@@ -52,6 +52,27 @@ final class AuthErrorCopyTests: XCTestCase {
         XCTAssertTrue(message.localizedCaseInsensitiveContains("try again"))
     }
 
+    func testMethodNotAllowedExplainsMergeBlock() {
+        let message = AuthErrorCopy.message(for: GitHubClient.ClientError.http(405))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("merge"))
+        XCTAssertFalse(message.contains("405"))
+    }
+
+    func testConflictExplainsBranchChanged() {
+        let message = AuthErrorCopy.message(for: GitHubClient.ClientError.http(409))
+        XCTAssertTrue(
+            message.localizedCaseInsensitiveContains("changed")
+                || message.localizedCaseInsensitiveContains("conflict")
+        )
+        XCTAssertFalse(message.contains("409"))
+    }
+
+    func testUnprocessableExplainsRejection() {
+        let message = AuthErrorCopy.message(for: GitHubClient.ClientError.http(422))
+        XCTAssertTrue(message.localizedCaseInsensitiveContains("rejected"))
+        XCTAssertFalse(message.contains("422"))
+    }
+
     func testUnhandledStatusIncludesCode() {
         let message = AuthErrorCopy.message(for: GitHubClient.ClientError.http(418))
         XCTAssertTrue(message.contains("418"))

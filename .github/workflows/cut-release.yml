@@ -46,6 +46,9 @@ jobs:
           CUR=$(grep -oE 'marketingVersion = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
           BUILD=$(grep -oE 'buildNumber = "[^"]+"' Project.swift | head -1 | sed 's/.*"\(.*\)"/\1/')
           if [[ -z "$CUR" ]]; then echo "::error::no marketingVersion in Project.swift"; exit 1; fi
+          if [[ ! "$CUR" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::marketingVersion '$CUR' is not a 3-part numeric version (MAJOR.MINOR.PATCH) — cannot bump"; exit 1
+          fi
           IFS=. read -r MA MI PA <<< "$CUR"
           case "$BUMP" in
             none)  NEW="$CUR" ;;

@@ -45,13 +45,17 @@ extension CheckRun {
 
 extension [CheckRun] {
     /// Roll a set of check runs up into one overall `CIStatus`, or nil when there are none.
-    /// Failure dominates, then pending, otherwise everything passed. (`CheckRun.ciStatus`
-    /// never yields `.error`, so it's not part of the rollup.)
+    /// Failure dominates, then pending. A green "passed" needs at least one genuinely successful
+    /// run: an all-neutral set (every run skipped/cancelled/neutral) is not a pass, so it rolls up
+    /// to `.neutral` — no green dot, and no spurious "CI passed" banner (which fires only on
+    /// `.success`). A mix of success + neutral still passes. (`CheckRun.ciStatus` never yields
+    /// `.error`, so it's not part of the rollup.)
     var ciRollup: CIStatus? {
         guard !isEmpty else { return nil }
         let statuses = map(\.ciStatus)
         if statuses.contains(.failure) { return .failure }
         if statuses.contains(.pending) { return .pending }
+        guard statuses.contains(.success) else { return .neutral }
         return .success
     }
 }
