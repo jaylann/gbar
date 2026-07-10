@@ -1527,6 +1527,33 @@ final class AppStoreTests: XCTestCase {
         XCTAssertTrue(store.releases.isEmpty)
         XCTAssertFalse(try store.isStarred(item(SearchIssue.stub(id: 1))))
     }
+
+    // MARK: - Persisted accounts decode
+
+    /// A corrupt/partial accounts blob must not sign the user out of everything: element-wise
+    /// decoding keeps the good accounts and drops only the malformed one, instead of the strict
+    /// `[Account]` decode nuking the whole list and orphaning the survivors' Keychain tokens.
+    func testDecodePersistedAccountsKeepsGoodDropsMalformed() throws {
+        let url = try makeURL()
+        let good = Account(login: "octocat", avatarURL: nil, kind: .oauth, apiBaseURL: url)
+        let alsoGood = Account(login: "hubber", avatarURL: nil, kind: .personalAccessToken, apiBaseURL: url)
+        let encoded = try JSONEncoder().encode([good, alsoGood])
+        var array = try XCTUnwrap(try JSONSerialization.jsonObject(with: encoded) as? [[String: Any]])
+        // Corrupt the second element: drop the required (non-optional) apiBaseURL so it fails to decode.
+        array[1].removeValue(forKey: "apiBaseURL")
+        let corrupted = try JSONSerialization.data(withJSONObject: array)
+
+        let decoded = AppStore.decodePersistedAccounts(from: corrupted)
+
+        XCTAssertEqual(decoded.map(\.login), ["octocat"], "the good account survives; the malformed one is dropped")
+    }
+
+    /// A blob that isn't even a JSON array decodes to no accounts rather than throwing out of the
+    /// restore path (matching the prior strict behaviour for a truly-corrupt blob).
+    func testDecodePersistedAccountsReturnsEmptyForNonArrayBlob() {
+        let garbage = Data("not json".utf8)
+        XCTAssertTrue(AppStore.decodePersistedAccounts(from: garbage).isEmpty)
+    }
 }
 
 /// In-memory token store so migration/account tests can inject `AppStore`'s Keychain hooks

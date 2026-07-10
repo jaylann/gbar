@@ -204,17 +204,39 @@ extension AppStore {
         // A PR still in the list but whose fetch fails keeps its key here (it's in `prs`), so its
         // baseline survives — that's what protects bug #3. The mark is pruned alongside so an
         // unchanged PR that stays in the list keeps its reuse hint.
-        let live = Set(prs.map(\.key))
-        prChecks = prChecks.filter { live.contains($0.key) }
-        prGates = prGates.filter { live.contains($0.key) }
-        prGateSeq = prGateSeq.filter { live.contains($0.key) }
-        prHydrationMark = prHydrationMark.filter { live.contains($0.key) }
-        lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
+        pruneHydrationMaps(keepingLive: Set(prs.map(\.key)))
         guard !prs.isEmpty else {
             checksTask = nil
             return
         }
         checksTask = checksWave(prs: prs, generation: checksGeneration)
+    }
+
+    /// Prune the per-PR hydration + CI-baseline maps down to `live` — the PR keys still present in
+    /// the sections. Shared by the hydration wave (which prunes before fetching) and the
+    /// rate-limited skip path (`kickOffHydration`, which prunes without fetching), so a PR that
+    /// left every section can't keep a stale CI dot, gate, or `lastCheckStatus` baseline in either
+    /// case. A PR still in the list whose fetch later fails keeps its key (it's in `live`), so its
+    /// baseline survives — the invariant behind bug #3.
+    func pruneHydrationMaps(keepingLive live: Set<PRCheckKey>) {
+        prChecks = prChecks.filter { live.contains($0.key) }
+        prGates = prGates.filter { live.contains($0.key) }
+        prGateSeq = prGateSeq.filter { live.contains($0.key) }
+        prHydrationMark = prHydrationMark.filter { live.contains($0.key) }
+        lastCheckStatus = lastCheckStatus.filter { live.contains($0.key) }
+    }
+
+    /// When rate-limited, do the lightweight bookkeeping the skipped N+1 waves still owe and report
+    /// that hydration should be skipped: prune the CI/gate maps to the live PR set (normally
+    /// hydrateChecks' job) so a PR that dropped out of every section can't keep a stale dot/gate,
+    /// and mark the repo feeds loaded so the Actions/Releases tabs show their empty/nudge state —
+    /// not a perpetual skeleton — even when the *first* poll is the one that's rate-limited.
+    /// Returns `false` (hydrate normally) when not rate-limited.
+    func hydrationSkippedForRateLimit(apis: [Account.ID: GitHubAPI]) -> Bool {
+        guard rateLimitedUntil.map({ $0 > Date() }) == true else { return false }
+        pruneHydrationMaps(keepingLive: Set(distinctPRFetches(from: sections, apis: apis).map(\.key)))
+        hasLoadedRepoFeeds = true
+        return true
     }
 
     /// The capped-concurrency hydration wave. Stale runs (a superseded `generation`) drop their
@@ -254,7 +276,6 @@ extension AppStore {
         var fallback: [PRFetch] = []
         // Seed from the (already pruned) live maps so absent keys stay absent, matching drainChecks.
         var pending = PendingHydration(checks: prChecks, gates: prGates, marks: prHydrationMark)
-        var didFold = false
         for (_, accountPRs) in Dictionary(grouping: prs, by: { $0.key.accountID }) {
             guard let api = accountPRs.first?.api else { continue }
             let refs = accountPRs.map { PRRef(repo: $0.issue.repositorySlug, number: $0.issue.number) }
@@ -268,7 +289,10 @@ extension AppStore {
                 fallback.append(contentsOf: accountPRs)
                 continue
             }
-            guard checksGeneration == generation else { return [] } // superseded — drop, no fallback
+            // Superseded while fetching this account's batch → drop without folding (no banners, no
+            // `lastCheckStatus` advance) and without fallback; the newer wave owns the state.
+            guard checksGeneration == generation else { return [] }
+            var didFold = false
             for pr in accountPRs {
                 let ref = PRRef(repo: pr.issue.repositorySlug, number: pr.issue.number)
                 guard let bundle = bundles[ref] else {
@@ -284,8 +308,13 @@ extension AppStore {
                 fold(key: pr.key, state: state, issueByKey: issueByKey, gateIssueSeq: freshSeq, into: &pending)
                 didFold = true
             }
+            // Publish each account's folds right away — under the same generation those folds (and
+            // their CI banners / `lastCheckStatus` advances, fired inside `fold`) committed under.
+            // There's no suspension between the guard above and here, so this is atomic per account:
+            // a *later* account's batch getting superseded then can't strand this account's already-
+            // fired banners with no matching `publishChecks`.
+            if didFold { publishChecks(pending, generation: generation) }
         }
-        if didFold { publishChecks(pending, generation: generation) }
         return fallback
     }
 

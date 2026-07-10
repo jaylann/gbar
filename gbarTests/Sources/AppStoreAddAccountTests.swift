@@ -153,6 +153,32 @@ final class AppStoreAddAccountTests: XCTestCase {
         XCTAssertEqual(box.get(account.keychainKey), "t2")
     }
 
+    /// `addAccount` must *force* its post-add refresh (#10): a poll refresh built from the account
+    /// list before the new account was appended may already be in flight. A non-force refresh would
+    /// coalesce onto that stale run and return, leaving the new account's data unloaded until the
+    /// next poll. Here a stale run is parked in flight (it only ends on cancellation); the forced
+    /// refresh must supersede it and load the just-added account now.
+    /// (Deterministic on the fixed code — force cancels the parked run, which resolves immediately.
+    /// A reverted non-force `addAccount` would instead await the parked run and hang.)
+    func testAddAccountForcesRefreshPastAnInFlightRun() async throws {
+        var fake = FakeGitHubAPI()
+        fake.currentUserResult = GitHubUser(login: "octocat", avatarURL: nil)
+        fake.defaultResult = [SearchIssue.stub(id: 1, number: 1)]
+        let (store, _) = try makeStore(api: fake)
+        // A stale in-flight refresh, built before the account was added, that ends only on cancel.
+        store.refreshTask = Task { _ = try? await Task.sleep(for: .seconds(3600)) }
+
+        try await store.addAccount(
+            token: "t",
+            kind: .oauth,
+            apiBaseURL: XCTUnwrap(URL(string: "https://api.github.com"))
+        )
+
+        XCTAssertEqual(store.accounts.map(\.login), ["octocat"])
+        XCTAssertTrue(store.sections.contains { !$0.items.isEmpty }, "the forced refresh loaded the new account")
+        XCTAssertTrue(store.hasLoaded)
+    }
+
     // MARK: - In-place 401 reconnect
 
     private func expiredOAuthStore() throws -> (AppStore, TokenBox, Account) {

@@ -42,8 +42,13 @@ extension AppStore {
                 Log.network.error("mark all read failed: \(error.localizedDescription, privacy: .public)")
             }
         }
+        // Surface both signals when they co-occur: an expired account (actionable — offers a
+        // reconnect) alongside a generic failure on another account. Showing only the expired
+        // message would silently drop the generic failure.
         if expired {
-            lastErrorMessage = "Session expired — reconnect in Settings."
+            lastErrorMessage = failed
+                ? "Session expired — reconnect in Settings. Some notifications couldn't be marked read."
+                : "Session expired — reconnect in Settings."
         } else {
             lastErrorMessage = failed ? "Couldn't mark all notifications as read." : nil
         }
