@@ -206,7 +206,10 @@ struct MenuContentView: View {
     private func toggleSearch() {
         withAnimation(Motion.respecting(reduceMotion, Motion.spring)) { searchActive.toggle() }
         if searchActive {
-            searchFocused = true
+            // The SearchField only mounts once `searchActive` flips and its slide-in transition
+            // settles, so setting @FocusState synchronously here targets a field that doesn't yet
+            // exist and no-ops. Defer to the next runloop tick (mirrors ApproveComposer.onAppear).
+            DispatchQueue.main.async { searchFocused = true }
         } else {
             searchText = ""
         }

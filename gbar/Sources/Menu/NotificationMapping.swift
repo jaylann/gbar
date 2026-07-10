@@ -55,10 +55,17 @@ extension GitHubNotification {
               let reposRange = apiURL.path.range(of: "/repos/")
         else { return nil }
 
-        let tail = apiURL.path[reposRange.upperBound...]
-            .replacingOccurrences(of: "/pulls/", with: "/pull/")
+        // Rewrite only the resource-type segment (owner/repo/<type>/…), not every "pulls" in the
+        // path: a string replace over the whole tail also rewrites an owner, repo, or branch that
+        // happens to be named "pulls". Segment 2 is the resource type — map only it, "pulls"→"pull".
+        var segments = apiURL.path[reposRange.upperBound...]
+            .split(separator: "/", omittingEmptySubsequences: false)
+            .map(String.init)
+        if segments.count > 2, segments[2] == "pulls" {
+            segments[2] = "pull"
+        }
         var components = URLComponents(url: AppConfig.webBaseURL(forAPI: apiBaseURL), resolvingAgainstBaseURL: false)
-        components?.path = "/" + tail
+        components?.path = "/" + segments.joined(separator: "/")
         return components?.url
     }
 }

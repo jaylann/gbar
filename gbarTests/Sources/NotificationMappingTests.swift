@@ -71,6 +71,21 @@ final class NotificationMappingTests: XCTestCase {
         XCTAssertEqual(url.absoluteString, "https://github.com/octo/repo/issues/5")
     }
 
+    /// Only the resource-type segment is rewritten: a repo literally named "pulls" must survive.
+    /// A naive `replacingOccurrences(of: "/pulls/", …)` over the whole tail would corrupt the repo
+    /// segment; the component-wise mapping touches only position 2.
+    func testHTMLURLRewritesOnlyResourceSegment() throws {
+        let notification = GitHubNotification.stub(
+            id: "1",
+            type: "PullRequest",
+            repo: "octo/pulls",
+            subjectURL: "https://api.github.com/repos/octo/pulls/pulls/3"
+        )
+        let api = try XCTUnwrap(URL(string: "https://api.github.com"))
+        let url = try XCTUnwrap(notification.htmlURL(apiBaseURL: api))
+        XCTAssertEqual(url.absoluteString, "https://github.com/octo/pulls/pull/3")
+    }
+
     func testHTMLURLIsNilWhenSubjectURLMissing() throws {
         let notification = GitHubNotification.stub(id: "1", subjectURL: nil)
         let api = try XCTUnwrap(URL(string: "https://api.github.com"))

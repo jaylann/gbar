@@ -164,7 +164,10 @@ extension GitHubGraphQL.PRNode {
             id: databaseId ?? number,
             number: number,
             title: title ?? "",
-            state: state.lowercased(),
+            // REST represents a merged PR as `state == "closed"` + `merged == true`; GraphQL
+            // splits MERGED into its own state. Fold MERGED back to "closed" so both hydration
+            // paths produce an identical `detail`, and carry the merged flag separately.
+            state: state == "MERGED" ? "closed" : state.lowercased(),
             htmlURL: url ?? "",
             merged: state == "MERGED",
             mergeable: Self.mergeableBool(mergeable),
@@ -230,7 +233,11 @@ extension GitHubGraphQL.ContextNode {
         CheckRun(
             id: databaseId ?? index,
             name: name ?? "check",
-            status: status?.lowercased() ?? "",
+            // A missing status maps to "completed", not "" — `CheckRun.ciStatus` treats anything
+            // other than "completed" as pending, so an absent status paired with a present
+            // conclusion (a finished run) would misclassify as pending. CheckRun nodes always
+            // carry a status; this is the correct fallback for the rare null.
+            status: status?.lowercased() ?? "completed",
             conclusion: conclusion?.lowercased(),
             startedAt: startedAt,
             completedAt: completedAt
