@@ -139,6 +139,51 @@ final class DeviceFlowClientTests: XCTestCase {
         XCTAssertEqual(counter.count, 2)
     }
 
+    /// A transient 5xx (here a proxy's non-JSON HTML body) mid-poll must not abort sign-in — the
+    /// loop keeps polling and the next 200 with the token succeeds.
+    func testPollForTokenRetriesTransientServerErrorThenSucceeds() async throws {
+        let counter = CallCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            switch counter.next() {
+            case 1:
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(url: url, statusCode: 502, httpVersion: nil, headerFields: nil)
+                )
+                return (response, Data("<html>Bad Gateway</html>".utf8))
+            default:
+                return try Self.ok(request, json: #"{"access_token": "gho_token"}"#)
+            }
+        }
+
+        let token = try await makeClient().pollForToken(makeCode())
+
+        XCTAssertEqual(token, "gho_token")
+        XCTAssertEqual(counter.count, 2)
+    }
+
+    /// A transient 429 mid-poll is likewise retried rather than decoded/aborted.
+    func testPollForTokenRetriesTooManyRequestsThenSucceeds() async throws {
+        let counter = CallCounter()
+        MockURLProtocol.handler = { request in
+            let url = try XCTUnwrap(request.url)
+            switch counter.next() {
+            case 1:
+                let response = try XCTUnwrap(
+                    HTTPURLResponse(url: url, statusCode: 429, httpVersion: nil, headerFields: nil)
+                )
+                return (response, Data())
+            default:
+                return try Self.ok(request, json: #"{"access_token": "gho_token"}"#)
+            }
+        }
+
+        let token = try await makeClient().pollForToken(makeCode())
+
+        XCTAssertEqual(token, "gho_token")
+        XCTAssertEqual(counter.count, 2)
+    }
+
     func testPollForTokenAccessDeniedThrows() async {
         MockURLProtocol.handler = { request in
             try Self.ok(request, json: #"{"error": "access_denied"}"#)

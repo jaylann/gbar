@@ -70,6 +70,12 @@ enum AuthErrorCopy {
             "GitHub rate-limited the request. Try again in a little while."
         case 404:
             "GitHub couldn't find that endpoint. Check the API base URL for your host under Advanced."
+        case 405:
+            "GitHub won't merge this PR — it's likely blocked by required checks or reviews."
+        case 409:
+            "This PR changed on GitHub (new commits or a merge conflict). Refresh and try again."
+        case 422:
+            "GitHub rejected the request. The PR may already be merged, closed, or missing required approvals."
         case 500...599:
             "GitHub is having trouble right now. Try again in a moment."
         default:

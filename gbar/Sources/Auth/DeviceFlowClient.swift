@@ -62,7 +62,7 @@ actor DeviceFlowClient {
     /// Step 2: poll until the user authorizes (or the code expires). Returns the token.
     func pollForToken(_ code: DeviceCode) async throws -> String {
         let url = webBaseURL.appendingPathComponent("login/oauth/access_token")
-        var waitNanos = UInt64(max(code.interval, 1)) * 1_000_000_000
+        var waitNanos = Self.backoffNanos(code.interval)
         let deadline = ContinuousClock.now.advanced(by: .seconds(code.expiresIn))
 
         while ContinuousClock.now < deadline {
@@ -72,7 +72,16 @@ actor DeviceFlowClient {
                 "device_code": code.deviceCode,
                 "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
             ]
-            let (data, _) = try await post(url, form: body)
+            let (data, response) = try await post(url, form: body)
+            // A transient 5xx or a 429 (or a proxy's non-JSON body behind either) would fail the
+            // decode and abort the whole sign-in — keep polling instead. The device-flow error
+            // states (`authorization_pending`/`slow_down`/…) arrive as JSON on 200 or 4xx, so decode
+            // everything else.
+            if let http = response as? HTTPURLResponse,
+               http.statusCode == 429 || (500...599).contains(http.statusCode)
+            {
+                continue
+            }
             let decoded = try jsonDecoder().decode(TokenResponse.self, from: data)
             if let token = decoded.accessToken { return token }
             switch decoded.error {
@@ -80,7 +89,7 @@ actor DeviceFlowClient {
             // GitHub's `slow_down` carries the *new* required interval (already increased), not a
             // delta — replace, don't accumulate, or repeated slow-downs compound and burn the
             // expiry window.
-            case "slow_down": waitNanos = UInt64(max(decoded.interval ?? 5, 1)) * 1_000_000_000
+            case "slow_down": waitNanos = Self.backoffNanos(decoded.interval ?? 5)
             case "expired_token": throw DeviceFlowError.expiredToken
             case "access_denied": throw DeviceFlowError.accessDenied
             case let other?: throw DeviceFlowError.unexpected(other)
@@ -88,6 +97,12 @@ actor DeviceFlowClient {
             }
         }
         throw DeviceFlowError.expiredToken
+    }
+
+    /// Poll back-off in nanoseconds, clamped to `[1, 60]` seconds so a hostile or garbage
+    /// host-supplied interval can't overflow the `UInt64` multiply (or stall the loop for hours).
+    private static func backoffNanos(_ interval: Int) -> UInt64 {
+        UInt64(min(max(interval, 1), 60)) * 1_000_000_000
     }
 
     private func post(_ url: URL, form: [String: String]) async throws -> (Data, URLResponse) {
