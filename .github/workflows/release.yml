@@ -41,7 +41,7 @@ jobs:
       # repo can't remove; a `-c` extraheader on top then sends TWO Authorization headers →
       # "Duplicate header" → HTTP 400 (broke the stage sync in v0.2.2/v0.2.4). So persist
       # nothing and authenticate each push explicitly with a -c extraheader.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -139,7 +139,7 @@ jobs:
       # Cask push authenticates as the release bot (GitHub App installed on jaylann/homebrew-tap).
       HAS_TAP: ${{ secrets.RP_APP_KEY != '' }}
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.tag.outputs.tag }}
 
